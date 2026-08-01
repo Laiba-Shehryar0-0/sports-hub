@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import express from 'express';
 import helmet from 'helmet';
 import cors from 'cors';
@@ -16,7 +17,16 @@ export function createApp() {
 
   app.use(helmet());
   app.use(cors({ origin: env.CORS_ORIGIN }));
-  app.use(pinoHttp({ logger }));
+  app.use(pinoHttp({
+    logger,
+    genReqId(req, res) {
+      const incoming = req.headers['x-request-id'];
+      const candidate = Array.isArray(incoming) ? incoming[0] : incoming;
+      const id = (candidate && /^[a-zA-Z0-9-]{1,64}$/.test(candidate)) ? candidate : randomUUID();
+      res.setHeader('X-Request-Id', id);
+      return id;
+    },
+  }));
 
   // No body to parse, nothing worth rate-limiting — ahead of both.
   app.get('/health', asyncHandler(async (req, res) => {
