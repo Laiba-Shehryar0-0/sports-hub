@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import express from 'express';
 import helmet from 'helmet';
 import cors from 'cors';
@@ -11,6 +13,9 @@ import { env } from './config/env.js';
 import { pool } from './db/pool.js';
 import { asyncHandler } from './utils/asyncHandler.js';
 import { AppError } from './utils/AppError.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const staticRoot = path.join(__dirname, '..', 'public', 'static');
 
 export function createApp() {
   const app = express();
@@ -52,6 +57,16 @@ export function createApp() {
   // Endpoint-specific limiters (auth/contact/orders) are applied by their
   // own routers, on top of this.
   app.use(globalLimiter);
+
+  // Serves the seeded kit images. image_url in the DB is root-relative
+  // (/static/kits/<filename>), never an absolute URL with a host — a
+  // baked-in localhost:4000 would break every row on deploy.
+  app.use('/static', express.static(staticRoot, {
+    maxAge: '7d',
+    setHeaders(res) {
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+    },
+  }));
 
   // Feature routers mount here, e.g.:
   // app.use('/api/auth', authRouter);
