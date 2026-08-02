@@ -13,6 +13,11 @@ const envSchema = z.object({
   DB_NAME_TEST: z.string().min(1),
   DB_CONNECTION_LIMIT: z.coerce.number().int().min(1).max(100).default(10),
 
+  // Used only by migrate.js/seed.js — a privileged account distinct from
+  // DB_USER, which must not carry DDL rights. Not required at app boot.
+  DB_MIGRATE_USER: z.string().min(1).optional(),
+  DB_MIGRATE_PASSWORD: z.string().default(''),
+
   JWT_SECRET: z.string().min(32, 'JWT_SECRET must be at least 32 characters'),
 
   CORS_ORIGIN: z.string().min(1).default('http://localhost:5173'),

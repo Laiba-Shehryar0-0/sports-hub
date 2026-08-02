@@ -8,14 +8,22 @@ import { logger } from '../utils/logger.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const migrationsDir = path.join(__dirname, 'migrations');
 
+if (!env.DB_MIGRATE_USER) {
+  logger.error(
+    'DB_MIGRATE_USER is not set. Migrations need a privileged DB user distinct from ' +
+    'DB_USER (which must not carry DDL rights) — set DB_MIGRATE_USER/DB_MIGRATE_PASSWORD in .env.',
+  );
+  process.exit(1);
+}
+
 // A dedicated connection with multipleStatements enabled, scoped to this
 // script only — migration files are static and trusted, unlike request data,
 // so this doesn't carry the injection risk the shared app pool must avoid.
 const connection = await mysql.createConnection({
   host: env.DB_HOST,
   port: env.DB_PORT,
-  user: env.DB_USER,
-  password: env.DB_PASSWORD,
+  user: env.DB_MIGRATE_USER,
+  password: env.DB_MIGRATE_PASSWORD,
   database: env.DB_NAME,
   multipleStatements: true,
 });

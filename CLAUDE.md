@@ -80,6 +80,9 @@ Never `res.status(500)` inside a controller.
 12. **Money is `INT` whole PKR** — no minor units, no floats. Comment every money column.
 13. **No `await` inside a `for` loop over rows.** Batch with `WHERE id IN (?)`.
 14. **Never log or return** passwords, hashes, tokens, cookies, or full order bodies.
+15. **Never inline `DB_PASSWORD` or any credential value into a bash command or a
+    `node -e` script.** Read them from `process.env` via `dotenv` instead — inlined values
+    land in shell history and terminal output, which is a log surface too.
 
 ## Database
 
