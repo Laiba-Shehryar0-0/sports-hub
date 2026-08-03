@@ -1,3 +1,6 @@
+// Snapshot of ../kit-frontend as of 2026-08-03 — reference only, do not edit here.
+// Source: src/data/featuredKitsSeed.js
+
 import cricketImg from '../assets/cricket.jfif';
 import footballImg from '../assets/football.jpg';
 import basketballImg from '../assets/basketball.jfif';

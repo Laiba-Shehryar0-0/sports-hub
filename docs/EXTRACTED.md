@@ -1,6 +1,6 @@
 # Extracted Literals — `kitShapes.js` & seed data
 
-Source: [kitShapes.js](kitShapes.js), [kitsSeed.js](kitsSeed.js), [galleryProductsSeed.js](galleryProductsSeed.js), [featuredKitsSeed.js](featuredKitsSeed.js).
+Source: [kitShapes.js](frontend-reference/kitShapes.js), [kitsSeed.js](frontend-reference/kitsSeed.js), [galleryProductsSeed.js](frontend-reference/galleryProductsSeed.js), [featuredKitsSeed.js](frontend-reference/featuredKitsSeed.js).
 Read directly, no guessing. Line numbers refer to `kitShapes.js` unless stated otherwise.
 
 ## kitType — `KIT_TYPES` (line 10-17)
@@ -9,14 +9,19 @@ Read directly, no guessing. Line numbers refer to `kitShapes.js` unless stated o
 jersey, polo, jumper, shorts, socks, cap
 ```
 
-## design.sport (customizer) — `SPORTS` (line 19-23)
+## design.sport (customizer) — `SPORTS`
 
 ```
-football, basketball, cricket
+football, basketball, cricket, training, others
 ```
 
-**This is a different, smaller set than the catalog `sport` enum** (see below) — the customizer
-only lets a user pick one of these 3 when building a design.
+**Widened 2026-08-03 from 3 values to 5 — this now matches the catalog `sport` enum exactly.**
+It previously held only `football, basketball, cricket`. The customizer derives a kit's sport
+from the `SPORT_KIT_GROUPS` group that owns it, and those groups are the five catalog values, so
+the 8 kits under `training` and `others` had no representable sport. The practical consequence
+was that `design.sport` was never written by any code path and every order carried the
+`DEFAULT_DESIGN` value (`'football'`), regardless of the kit chosen. The two enums are now the
+same set, so the group id can be used directly with no mapping step.
 
 ## size — `SIZES` (line 25)
 
@@ -111,7 +116,7 @@ nest further).
 
 ---
 
-## Catalog `sport` enum — for reference only (NOT the same field as `design.sport`)
+## Catalog `sport` enum — same value set as `design.sport`, different field
 
 From `kitsSeed.js` / `featuredKitsSeed.js`, the `/kits`, `/products`, `/kits/featured` catalog
 rows use:
@@ -121,8 +126,11 @@ cricket, football, basketball, training, others
 ```
 
 This is the 5-value enum in `API_CONTRACT.md` and CLAUDE.md — correct for the **catalog**
-`sport` field. It is **not** the enum for the **customizer's `design.sport`**, which only has 3
-values (see above).
+`sport` field. **As of 2026-08-03 `design.sport` uses this same set** (it was widened from 3
+values; see the `design.sport` section above). They remain distinct *fields* — one describes a
+catalog row, the other the sport a design was built for — but a value valid in one is now valid
+in the other, and the customizer derives `design.sport` directly from its `SPORT_KIT_GROUPS`
+group id with no mapping step.
 
 ---
 
@@ -162,7 +170,7 @@ against whatever the customizer actually puts there) — not silently drop them.
 | Field | Plan's `backend-plan.md` §4 guess | Actual (`kitShapes.js`) | Verdict |
 |---|---|---|---|
 | `kitType` | `jersey, shorts, tracksuit, hoodie, cap` | `jersey, polo, jumper, shorts, socks, cap` | **Wrong.** `tracksuit`/`hoodie` don't exist; missing `polo`/`jumper`/`socks`. |
-| `design.sport` | `cricket, football, basketball, training, others` (borrowed from the catalog enum) | `football, basketball, cricket` | **Wrong.** Design/order `sport` is a 3-value enum, not the 5-value catalog enum. |
+| `design.sport` | `cricket, football, basketball, training, others` (borrowed from the catalog enum) | `football, basketball, cricket, training, others` (widened 2026-08-03) | **Now correct.** The plan's original 5-value guess matches the widened enum; the 3-value set it was checked against no longer exists. |
 | `template` | `solid, stripes, halves, gradient, chevron` | `solid, striped, diagonal, two-tone, hoops, halves, chevron, sash, fade, fade-left, dots, sleeves` | **Wrong.** `stripes` should be `striped`; `gradient` doesn't exist; 7 real values missing. |
 | `size` | `XS, S, M, L, XL, XXL, CUSTOM` | `S, M, L, XL, Custom` | **Wrong.** No `XS`/`XXL`; literal is `Custom` not `CUSTOM`. |
 | `font` | `Bebas Neue, Anton, Oswald, Roboto Condensed, Inter` | `Bebas Neue, Impact, Georgia, Courier New, Oswald, Anton, Montserrat, Teko, Russo One, Archivo Black` | **Wrong.** `Roboto Condensed`/`Inter` don't exist; 6 real values missing. |

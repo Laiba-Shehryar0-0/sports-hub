@@ -1,3 +1,6 @@
+// Snapshot of ../kit-frontend as of 2026-08-04 — reference only, do not edit here.
+// Source: src/pages/Checkout.jsx
+
 import { useState, useCallback, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import KitPreview from '../customize/KitPreview';
@@ -29,7 +32,7 @@ function formatPKR(n) {
 
 export default function Checkout() {
   const [design] = useState(loadStoredDesign);
-  const [editedKit] = useState(() => loadEditedKitImage('front'));
+  const [editedKit] = useState(() => loadEditedKitImage('front', design.kitType));
   const navigate = useNavigate();
 
   const [totalKits, setTotalKits] = useState(11);

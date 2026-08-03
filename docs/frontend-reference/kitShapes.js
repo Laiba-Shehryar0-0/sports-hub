@@ -1,3 +1,6 @@
+// Snapshot of ../kit-frontend as of 2026-08-04 — reference only, do not edit here.
+// Source: src/customize/kitShapes.js
+
 /**
  * SVG path data for each kit type.
  * ViewBox varies per garment — see each getKitPath() case.
@@ -16,10 +19,15 @@ export const KIT_TYPES = [
   { id: 'cap',    label: 'Cap' },
 ];
 
+// Widened from 3 to 5 to match the catalog sport enum and the SPORT_KIT_GROUPS group ids, so
+// every kit in the customizer can report a valid sport. Previously 'training' and 'others' had
+// no representation here, which left design.sport unwritable for 8 of the 20 catalog kits.
 export const SPORTS = [
   { id: 'football',   label: 'Football' },
   { id: 'basketball', label: 'Basketball' },
   { id: 'cricket',    label: 'Cricket' },
+  { id: 'training',   label: 'Training' },
+  { id: 'others',     label: 'Others' },
 ];
 
 export const SIZES = ['S', 'M', 'L', 'XL', 'Custom'];
@@ -162,7 +170,8 @@ export const DEFAULT_DESIGN = {
 export const DESIGN_STORAGE_KEY = 'kitlab_current_design';
 export const SAVED_DESIGNS_KEY = 'kitlab_saved_designs';
 export const DRAWN_LOGO_KEY = 'kitlab_drawn_logo';
-// Flattened, drawn-on kit PNG per side — stored as { front, back }.
+// Flattened, drawn-on kit PNG per side, tagged with the garment it was drawn on — stored as
+// { front: { url, kitType }, back: { url, kitType } }.
 export const EDITED_KIT_KEY = 'kitlab_edited_kit';
 // Full Fabric.js canvas state (strokes, shapes, text — not just the flattened PNG) for the Kit
 // Editor, keyed by side, so reopening it continues the same in-progress edit instead of
@@ -170,24 +179,30 @@ export const EDITED_KIT_KEY = 'kitlab_edited_kit';
 export const KIT_CANVAS_STATE_KEY = 'kitlab_kit_canvas_state';
 
 /** Reads the flattened, drawn-on kit image for one side, if the user has edited and saved it
- *  from the Kit Editor. */
-export function loadEditedKitImage(side) {
+ *  from the Kit Editor. Returns null unless the snapshot was drawn on `kitType` — a frozen
+ *  jersey must never replay on top of a jumper just because it's still in storage. */
+export function loadEditedKitImage(side, kitType) {
   try {
     const raw = localStorage.getItem(EDITED_KIT_KEY);
     if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    return parsed?.[side] || null;
+    const entry = JSON.parse(raw)?.[side];
+    // Pre-tagging entries were a bare data-URL string with no kitType recorded. There's no way
+    // to prove which garment they came from, so treat them as stale rather than risk the bug
+    // this guard exists to stop.
+    if (!entry || typeof entry !== 'object') return null;
+    return entry.kitType === kitType ? entry.url : null;
   } catch {
     return null;
   }
 }
 
-/** Persists the flattened, drawn-on kit image for one side. */
-export function saveEditedKitImage(side, dataUrl) {
+/** Persists the flattened, drawn-on kit image for one side, tagged with the kitType it was
+ *  drawn on so it can never be shown for a different garment later. */
+export function saveEditedKitImage(side, dataUrl, kitType) {
   try {
     const raw = localStorage.getItem(EDITED_KIT_KEY);
     const parsed = raw ? JSON.parse(raw) : {};
-    parsed[side] = dataUrl;
+    parsed[side] = { url: dataUrl, kitType };
     localStorage.setItem(EDITED_KIT_KEY, JSON.stringify(parsed));
   } catch {
     /* storage unavailable */
@@ -317,6 +332,7 @@ export function getKitPath(type) {
         cx: 150, cy: 80, r: 32,
       };
     default:
+      console.warn(`[kitShapes] Unknown kitType "${type}" — falling back to jersey.`);
       return getKitPath('jersey');
   }
 }

@@ -1,3 +1,6 @@
+// Snapshot of ../kit-frontend as of 2026-08-04 — reference only, do not edit here.
+// Source: src/pages/Customize.jsx
+
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { useNavigate, useSearchParams, Link } from 'react-router-dom';
 import KitPreview from '../customize/KitPreview';
@@ -106,10 +109,10 @@ const SPORT_KIT_GROUPS = [
   {
     id: 'others', label: 'Others',
     items: [
-      { id: 'boxing-kit',  label: 'Boxing Kit',  image: boxingKitImg,  kitType: 'shorts' },
-      { id: 'hockey-kit',  label: 'Hockey Kit',  image: hockeyKitImg,  kitType: 'jersey' },
-      { id: 'cycling-kit', label: 'Cycling Kit', image: cyclingKitImg, imageBack: cyclingKitBackImg, kitType: 'jersey' },
-      { id: 'rugby-kit',   label: 'Rugby Kit',   image: rugbyKitImg,   imageBack: rugbyKitBackImg,   kitType: 'jersey' },
+      { id: 'boxing-kit',  label: 'Boxing Gloves',  image: boxingKitImg,  kitType: 'shorts' },
+      { id: 'hockey-kit',  label: 'Hockey Shirt',   image: hockeyKitImg,  kitType: 'jersey' },
+      { id: 'cycling-kit', label: 'Cycling Shirt',  image: cyclingKitImg, imageBack: cyclingKitBackImg, kitType: 'jersey' },
+      { id: 'rugby-kit',   label: 'Rugby Shirt',    image: rugbyKitImg,   imageBack: rugbyKitBackImg,   kitType: 'jersey' },
     ],
   },
 ];
@@ -144,11 +147,14 @@ const DEFAULT_LAYER_ORDER = [
 export default function Customize() {
   const [searchParams] = useSearchParams();
   // Coming from a Kits catalog card carries ?kit=<slug> so this opens straight into that kit
-  // instead of whatever was last customized.
+  // instead of whatever was last customized. sport comes from the group that owns the item —
+  // group ids and the SPORTS enum are the same 5 values, so this is always valid.
   const [design, setDesign, { undo, redo, canUndo, canRedo }] = useHistoryState(() => {
     const stored = loadStoredDesign();
     const match = findKitItem(searchParams.get('kit'));
-    return match ? { ...stored, kitType: match.item.kitType, kitProduct: match.item.label } : stored;
+    return match
+      ? { ...stored, kitType: match.item.kitType, kitProduct: match.item.label, sport: match.group.id }
+      : stored;
   });
   const [activeTab, setActiveTab] = useState('kit');
   const [activeTool, setActiveTool] = useState('select');
@@ -206,11 +212,25 @@ export default function Customize() {
 
   // Shows the flattened, drawn-on kit from the Kit Editor (if this side has one) in place of the
   // live SVG preview — so coming "Back" from editing actually shows what was drawn.
-  const [editedKitUrl, setEditedKitUrl] = useState(() => loadEditedKitImage(side));
+  const [editedKitUrl, setEditedKitUrl] = useState(() => loadEditedKitImage(side, design.kitType));
 
   useEffect(() => {
-    setEditedKitUrl(loadEditedKitImage(side));
-  }, [side]);
+    setEditedKitUrl(loadEditedKitImage(side, design.kitType));
+  }, [side, design.kitType]);
+
+  // Arriving from a Kits catalog card (?kit=<slug>) chooses a specific garment, but that path
+  // sets state directly instead of going through a mutator, so nothing else clears the frozen
+  // snapshot from a previous Kit Editor session. The kitType tag alone wouldn't cover this:
+  // switching between two kits that share a kitType (football-jersey -> hockey-kit, both
+  // 'jersey') would still replay the old drawing. Mount-only on purpose — re-running when
+  // searchParams changes identity would wipe a fresh edit as the editor navigates back.
+  useEffect(() => {
+    if (!searchParams.get('kit')) return;
+    clearEditedKitImage('front');
+    clearEditedKitImage('back');
+    setEditedKitUrl(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Any further customization (color/text/logo/etc.) invalidates the frozen snapshot for this
   // side — otherwise those changes would silently stop showing up on screen. Called explicitly
@@ -535,7 +555,7 @@ function KitPanel({ design, patch, initialKitSlug, side }) {
               {activeGroup.items.map(item => (
                 <button
                   key={item.id}
-                  onClick={() => patch({ kitType: item.kitType, kitProduct: item.label })}
+                  onClick={() => patch({ kitType: item.kitType, kitProduct: item.label, sport: activeGroup.id })}
                   className={kitBtnCls(design.kitProduct === item.label)}
                 >
                   <img src={side === 'back' && item.imageBack ? item.imageBack : item.image} alt={item.label} className={kitThumbCls} />

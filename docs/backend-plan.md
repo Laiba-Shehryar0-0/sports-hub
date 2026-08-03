@@ -255,7 +255,7 @@ CREATE TABLE kit_prices (
 ```
 
 No `template` column: `BASE_PRICES` in `kitShapes.js` is keyed by `kit_type` alone — there is no
-per-template price variation in the source data (see `docs/frontend-reference/EXTRACTED.md`).
+per-template price variation in the source data (see `docs/EXTRACTED.md`).
 
 **`kit_label` is a display lookup, not a price input** — it never participates in the price
 calculation, it's just so the `/orders` response's `pricing.kitLabel` can be a plain `SELECT`
@@ -353,7 +353,7 @@ CREATE TABLE contact_submissions (
 
 The design object is structured state, so every field gets a bound. Enum lists below are copied
 verbatim from `src/customize/kitShapes.js` → `DEFAULT_DESIGN`, `DELIVERY_METHODS`, as extracted in
-`docs/frontend-reference/EXTRACTED.md`.
+`docs/EXTRACTED.md`.
 
 ```js
 const HEX = z.string().regex(/^#[0-9A-Fa-f]{6}$/);
@@ -366,9 +366,14 @@ const optionalText = (max) => z.string().max(max).optional().default('');
 
 const designSchema = z.object({
   kitType:     z.enum(['jersey', 'polo', 'jumper', 'shorts', 'socks', 'cap']),
-  // Customizer's 3-value sport enum — NOT the 5-value catalog sport enum
-  // (cricket/football/basketball/training/others) used by /kits, /products, /kits/featured.
-  sport:       z.enum(['football', 'basketball', 'cricket']),
+  // WIDENED 2026-08-03 from 3 values to 5, so this now matches the catalog sport enum used by
+  // /kits, /products, /kits/featured. Why: SPORT_KIT_GROUPS in the customizer has five groups
+  // (cricket/football/basketball/training/others) and a kit's sport is derived from the group
+  // that owns it. Under the old 3-value enum the 8 kits in `training` and `others` had no
+  // representable sport, so design.sport was never written at all and every order reported the
+  // DEFAULT_DESIGN value ('football'). Keeping the two enums identical removes that whole class
+  // of bug — there is no longer a mapping step that can fail.
+  sport:       z.enum(['football', 'basketball', 'cricket', 'training', 'others']),
   template:    z.enum([
     'solid', 'striped', 'diagonal', 'two-tone', 'hoops', 'halves',
     'chevron', 'sash', 'fade', 'fade-left', 'dots', 'sleeves',

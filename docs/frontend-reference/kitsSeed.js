@@ -1,3 +1,6 @@
+// Snapshot of ../kit-frontend as of 2026-08-04 — reference only, do not edit here.
+// Source: src/data/kitsSeed.js
+
 import cricketShirtImg from '../assets/cricket-shirt-front.png';
 import cricketTrousersImg from '../assets/cricket-trousers-front.png';
 import cricketSweaterImg from '../assets/cricket-sweater-front.png';
@@ -36,8 +39,8 @@ export const KITS_SEED = [
   { id: 14, slug: 'training-bib',     emoji: '🎽', image: trainingBibImg,    name: 'Training Bib',       sport: 'football',   desc: 'Lightweight mesh training bib for team drills.', color: '#0a1a3a' },
   { id: 15, slug: 'warmup-suit',      emoji: '🧥', image: warmupSuitImg,     name: 'Warm-up Suit',       sport: 'basketball', desc: 'Full-body warm-up suit for pre-game preparation.', color: '#7a3a00' },
   { id: 16, slug: 'tracksuit',        emoji: '👟', image: tracksuitImg,      name: 'Tracksuit',           sport: 'training',   desc: 'Comfortable full-body tracksuit for training sessions.', color: '#2a0a4a' },
-  { id: 17, slug: 'boxing-kit',       emoji: '🥊', image: boxingKitImg,      name: 'Boxing Kit',          sport: 'others',     desc: 'Professional boxing shorts and vest set.', color: '#0a3a1a' },
-  { id: 18, slug: 'hockey-kit',       emoji: '🏑', image: hockeyKitImg,      name: 'Hockey Kit',          sport: 'others',     desc: 'Durable hockey jersey and shorts for field play.', color: '#4a0010' },
-  { id: 19, slug: 'cycling-kit',      emoji: '🚴', image: cyclingKitImg,     name: 'Cycling Kit',         sport: 'others',     desc: 'Aerodynamic cycling jersey and shorts.', color: '#0a1a3a' },
-  { id: 20, slug: 'rugby-kit',        emoji: '🏉', image: rugbyKitImg,       name: 'Rugby Kit',           sport: 'others',     desc: 'Heavy-duty rugby jersey built for contact sport.', color: '#3a1a0a' },
+  { id: 17, slug: 'boxing-kit',       emoji: '🥊', image: boxingKitImg,      name: 'Boxing Gloves',       sport: 'others',     desc: 'Professional boxing shorts and vest set.', color: '#0a3a1a' },
+  { id: 18, slug: 'hockey-kit',       emoji: '🏑', image: hockeyKitImg,      name: 'Hockey Shirt',        sport: 'others',     desc: 'Durable hockey jersey and shorts for field play.', color: '#4a0010' },
+  { id: 19, slug: 'cycling-kit',      emoji: '🚴', image: cyclingKitImg,     name: 'Cycling Shirt',       sport: 'others',     desc: 'Aerodynamic cycling jersey and shorts.', color: '#0a1a3a' },
+  { id: 20, slug: 'rugby-kit',        emoji: '🏉', image: rugbyKitImg,       name: 'Rugby Shirt',         sport: 'others',     desc: 'Heavy-duty rugby jersey built for contact sport.', color: '#3a1a0a' },
 ];

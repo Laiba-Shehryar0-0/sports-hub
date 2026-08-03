@@ -26,10 +26,10 @@ VALUES
   ('training-bib', 'Training Bib', 'football', '🎽', '/static/kits/training-bib-front.png', 'Lightweight mesh training bib for team drills.', '#0a1a3a', 0, NULL, NULL, NULL, NULL, 14, 1),
   ('warmup-suit', 'Warm-up Suit', 'basketball', '🧥', '/static/kits/warmup-suit-front.png', 'Full-body warm-up suit for pre-game preparation.', '#7a3a00', 0, NULL, NULL, NULL, NULL, 15, 1),
   ('tracksuit', 'Tracksuit', 'training', '👟', '/static/kits/tracksuit-front.png', 'Comfortable full-body tracksuit for training sessions.', '#2a0a4a', 0, NULL, NULL, NULL, NULL, 16, 1),
-  ('boxing-kit', 'Boxing Kit', 'others', '🥊', '/static/kits/boxing-kit.png', 'Professional boxing shorts and vest set.', '#0a3a1a', 0, NULL, NULL, NULL, NULL, 17, 1),
-  ('hockey-kit', 'Hockey Kit', 'others', '🏑', '/static/kits/hockey-kit-front.png', 'Durable hockey jersey and shorts for field play.', '#4a0010', 0, NULL, NULL, NULL, NULL, 18, 1),
-  ('cycling-kit', 'Cycling Kit', 'others', '🚴', '/static/kits/cycling-kit-front.png', 'Aerodynamic cycling jersey and shorts.', '#0a1a3a', 0, NULL, NULL, NULL, NULL, 19, 1),
-  ('rugby-kit', 'Rugby Kit', 'others', '🏉', '/static/kits/rugby-kit-front.png', 'Heavy-duty rugby jersey built for contact sport.', '#3a1a0a', 0, NULL, NULL, NULL, NULL, 20, 1),
+  ('boxing-kit', 'Boxing Gloves', 'others', '🥊', '/static/kits/boxing-kit.png', 'Professional boxing shorts and vest set.', '#0a3a1a', 0, NULL, NULL, NULL, NULL, 17, 1),
+  ('hockey-kit', 'Hockey Shirt', 'others', '🏑', '/static/kits/hockey-kit-front.png', 'Durable hockey jersey and shorts for field play.', '#4a0010', 0, NULL, NULL, NULL, NULL, 18, 1),
+  ('cycling-kit', 'Cycling Shirt', 'others', '🚴', '/static/kits/cycling-kit-front.png', 'Aerodynamic cycling jersey and shorts.', '#0a1a3a', 0, NULL, NULL, NULL, NULL, 19, 1),
+  ('rugby-kit', 'Rugby Shirt', 'others', '🏉', '/static/kits/rugby-kit-front.png', 'Heavy-duty rugby jersey built for contact sport.', '#3a1a0a', 0, NULL, NULL, NULL, NULL, 20, 1),
   -- Featured-only rows (FEATURED_KITS_SEED). Slugs (`featured-*-kit`) are
   -- invented — the source has no slug field for these.
   ('featured-cricket-kit', 'Cricket Kit', 'cricket', '🏏', '/static/kits/cricket.jfif', 'Premium uniform with professional cut and breathable fabric.', '#8B6914', 1, 'Featured', '#F5A623', '#3d3000', '138, 112, 0', 21, 1),

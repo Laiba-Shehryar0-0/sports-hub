@@ -1,3 +1,6 @@
+// Snapshot of ../kit-frontend as of 2026-08-04 — reference only, do not edit here.
+// Source: src/data/galleryProductsSeed.js
+
 import cricketShirtImg    from '../assets/cricket-shirt-front.png';
 import cricketTrousersImg from '../assets/cricket-trousers-front.png';
 import cricketSweaterImg  from '../assets/cricket-sweater-front.png';

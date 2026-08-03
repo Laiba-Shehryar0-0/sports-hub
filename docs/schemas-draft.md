@@ -1,7 +1,7 @@
 # Schemas draft — rewritten from EXTRACTED.md
 
 Replaces the `designSchema` / `createOrderSchema` sketch in `backend-plan.md` §4. Every enum
-below is copied verbatim (including casing) from [EXTRACTED.md](frontend-reference/EXTRACTED.md),
+below is copied verbatim (including casing) from [EXTRACTED.md](EXTRACTED.md),
 which was read directly from `kitShapes.js`. Nothing here is copy-pasted from the old plan without
 re-checking it against that source.
 
@@ -35,9 +35,14 @@ const designSchema = z.object({
   // leaves room for the catalog to grow without a matching backend deploy.
   kitProduct: z.string().max(80).nullable(),
 
-  // This is the customizer's 3-value sport enum, NOT the 5-value catalog sport enum
-  // (cricket/football/basketball/training/others) used by /kits, /products, /kits/featured.
-  sport: z.enum(['football', 'basketball', 'cricket']),
+  // WIDENED 2026-08-03 from 3 values to 5, so this now matches the catalog sport enum used by
+  // /kits, /products, /kits/featured. Why: SPORT_KIT_GROUPS in the customizer has five groups
+  // (cricket/football/basketball/training/others) and a kit's sport is derived from the group
+  // that owns it. Under the old 3-value enum the 8 kits in `training` and `others` had no
+  // representable sport, so design.sport was never written at all and every order reported the
+  // DEFAULT_DESIGN value ('football'). Keeping the two enums identical removes that whole class
+  // of bug — there is no longer a mapping step that can fail.
+  sport: z.enum(['football', 'basketball', 'cricket', 'training', 'others']),
 
   template: z.enum([
     'solid', 'striped', 'diagonal', 'two-tone', 'hoops', 'halves',
