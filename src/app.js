@@ -14,6 +14,7 @@ import { pool } from './db/pool.js';
 import { asyncHandler } from './utils/asyncHandler.js';
 import { AppError } from './utils/AppError.js';
 import catalogRouter from './modules/catalog/catalog.routes.js';
+import authRouter from './modules/auth/auth.routes.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const staticRoot = path.join(__dirname, '..', 'public', 'static');
@@ -73,8 +74,11 @@ export function createApp() {
   // /products), so it mounts at /api, not /api/kits.
   app.use('/api', catalogRouter);
 
+  // authRouter declares relative paths (/login, /me, ...), so it mounts at /api/auth — unlike
+  // catalogRouter above, which declares full paths and mounts at /api.
+  app.use('/api/auth', authRouter);
+
   // Remaining feature routers mount here, e.g.:
-  // app.use('/api/auth', authRouter);
   // app.use('/api/contact', contactRouter);
   // app.use('/api/orders', ordersRouter);
 
