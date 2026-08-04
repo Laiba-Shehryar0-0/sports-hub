@@ -46,14 +46,52 @@ Response `200`:
 }
 ```
 Response `401`: `{ "message": "Invalid email or password." }`
+Response `403` — **added 2026-08-04**, when the password is correct but the email is unverified:
+```json
+{
+  "message": "Please verify your email address to sign in.",
+  "code": "EMAIL_NOT_VERIFIED",
+  "details": { "verificationToken": "64-hex-chars", "expiresIn": 600 }
+}
+```
+The client should route to the verification screen using `details.verificationToken`. This 403 is
+returned **only after the password has been verified**, so it never reveals whether an address is
+registered to someone who doesn't already know the password — an unverified account with a wrong
+password returns the same generic 401 as an unknown address.
 
 ### `POST /auth/register`
 Request:
 ```json
 { "name": "Jane Doe", "email": "user@example.com", "password": "plaintext-from-form" }
 ```
-Response `200`: same shape as login.
+Response `200` — **CHANGED 2026-08-04: no longer returns a session token.** Registration now
+creates the account in an unverified state and emails a 6-digit code:
+```json
+{
+  "user": { "id": 1, "name": "Jane Doe", "email": "user@example.com", "avatar": "J" },
+  "verification": { "token": "64-hex-chars", "expiresIn": 600 }
+}
+```
+`verification.token` identifies the pending verification. **It is not a bearer credential** — it
+grants nothing and must not be sent as `Authorization` or stored as a session.
 Response `409`: `{ "message": "An account with this email already exists." }`
+
+### `POST /auth/verify`
+Exchanges the emailed code for a real session.
+```json
+{ "token": "<verification.token>", "code": "123456" }
+```
+Response `200`: `{ "user": {...}, "token": "..." }` — same shape login used to return.
+Response `401`: `{ "message": "That code is incorrect.", "code": "CODE_INVALID", "details": { "attemptsRemaining": 4 } }`
+Response `403`: `{ "message": "That code is no longer valid. Request a new one.", "code": "CODE_EXPIRED" }`
+— returned when the code has expired (10 min), been used, or exhausted its 5 attempts.
+
+### `POST /auth/resend`
+```json
+{ "token": "<verification.token>" }
+```
+Response `200`: `{ "expiresIn": 600 }` — a new code replaces the old one.
+Response `429`: `RESEND_COOLDOWN` (60s between sends) or `RESEND_LIMIT` (10 per verification).
 
 **Note:** `avatar` is just a single uppercase letter (first letter of the name) in
 the current design — not a URL. Password rules already enforced client-side:

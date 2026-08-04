@@ -1,9 +1,11 @@
 import { Router } from 'express';
 import { validate } from '../../middlewares/validate.js';
 import { requireAuth } from '../../middlewares/requireAuth.js';
-import { authLimiter, loginLimiter } from '../../middlewares/rateLimiters.js';
-import { registerSchema, loginSchema, emptyBodySchema, emptyQuerySchema } from './auth.schema.js';
-import { register, login, me, logout } from './auth.controller.js';
+import { authLimiter, loginLimiter, verifyLimiter, resendLimiter } from '../../middlewares/rateLimiters.js';
+import {
+  registerSchema, loginSchema, verifySchema, resendSchema, emptyBodySchema, emptyQuerySchema,
+} from './auth.schema.js';
+import { register, login, verifyEmail, resendCode, me, logout } from './auth.controller.js';
 
 const router = Router();
 
@@ -15,6 +17,8 @@ const router = Router();
 // router — so the body is parsed by the time this runs.
 router.post('/register', authLimiter, validate(registerSchema), register);
 router.post('/login', authLimiter, loginLimiter, validate(loginSchema), login);
+router.post('/verify', authLimiter, verifyLimiter, validate(verifySchema), verifyEmail);
+router.post('/resend', authLimiter, resendLimiter, validate(resendSchema), resendCode);
 router.get('/me', requireAuth, validate(emptyQuerySchema, 'query'), me);
 router.post('/logout', requireAuth, validate(emptyBodySchema), logout);
 

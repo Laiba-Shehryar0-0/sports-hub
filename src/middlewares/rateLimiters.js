@@ -69,3 +69,26 @@ export const loginLimiter = makeLimiter({
   message: 'Too many sign-in attempts. Please try again later.',
   keyGenerator: loginKey,
 });
+
+// Per IP+token. The pending token is 1:1 with an account and unguessable, so it scopes the limit
+// as tightly as an email would without letting the endpoint be used to probe whether an address
+// is registered. Stacked under authLimiter (per-IP), which caps someone registering many accounts
+// to farm a fresh bucket each.
+//
+// This is only the outer guard — the real defence against a 10^6 code space is the per-code
+// 5-attempt cap plus the resend cap, both DB-backed so they survive a restart. MemoryStore does not.
+const verifyKey = (req) => `${ipKey(req.ip)}|${String(req.body?.token ?? '').slice(0, 64)}`;
+
+export const verifyLimiter = makeLimiter({
+  windowMs: 15 * 60 * 1000,
+  max: 15,
+  message: 'Too many verification attempts. Please try again later.',
+  keyGenerator: verifyKey,
+});
+
+export const resendLimiter = makeLimiter({
+  windowMs: 60 * 60 * 1000,
+  max: 12,
+  message: 'Too many codes requested. Please try again later.',
+  keyGenerator: verifyKey,
+});

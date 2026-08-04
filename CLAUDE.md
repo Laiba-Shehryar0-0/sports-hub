@@ -83,6 +83,11 @@ Never `res.status(500)` inside a controller.
 15. **Never inline `DB_PASSWORD` or any credential value into a bash command or a
     `node -e` script.** Read them from `process.env` via `dotenv` instead — inlined values
     land in shell history and terminal output, which is a log surface too.
+16. **Never run `DELETE` or `UPDATE` without a `WHERE` clause** — any table, any context,
+    including one-off cleanup scripts. Before removing test data: `SELECT` the target rows,
+    print them, then scope the statement to explicit ids or a test-only pattern
+    (`WHERE email LIKE 'smoke%@example.com'`). "The table only has test rows in it" is an
+    assumption, not a guarantee — it is exactly the reasoning that deletes real data.
 
 ## Database
 

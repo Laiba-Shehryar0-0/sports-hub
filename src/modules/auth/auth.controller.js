@@ -3,18 +3,30 @@ import * as authService from './auth.service.js';
 
 export const register = asyncHandler(async (req, res) => {
   const { name, email, password } = req.body;
-  const result = await authService.register({
-    name,
-    email,
-    password,
+  const result = await authService.register({ name, email, password });
+
+  // 200, NOT 201 — deliberate. docs/API_CONTRACT.md pins register's success status at 200, and
+  // the contract wins over REST convention per CLAUDE.md. This looks inconsistent next to
+  // POST /contact -> 201; that inconsistency is the contract's, not a bug.
+  //
+  // The body is { user, verification }, NOT { user, token } — registration no longer produces a
+  // session. The client must POST /auth/verify with the emailed code to get one.
+  res.json(result);
+});
+
+export const verifyEmail = asyncHandler(async (req, res) => {
+  const { token, code } = req.body;
+  const result = await authService.verifyEmail({
+    token,
+    code,
     userAgent: req.get('user-agent'),
     ip: req.ip,
   });
+  res.json(result);
+});
 
-  // 200, NOT 201 — deliberate. docs/API_CONTRACT.md:55 pins register's success status at 200
-  // ("same shape as login"), and the contract wins over REST convention per CLAUDE.md. This
-  // looks inconsistent next to POST /contact -> 201; that inconsistency is the contract's, not
-  // a bug. Changing it to 201 breaks the frontend's agreed response handling.
+export const resendCode = asyncHandler(async (req, res) => {
+  const result = await authService.resendCode({ token: req.body.token });
   res.json(result);
 });
 
