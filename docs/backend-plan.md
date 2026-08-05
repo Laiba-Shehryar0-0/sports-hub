@@ -418,7 +418,10 @@ export const createOrderSchema = z.object({
   }).strict(),
   deliveryId: z.enum(['standard', 'express', 'rush', 'international']),
   paymentId:  z.enum(['card', 'bank', 'cod']),
-  totalKits:  z.coerce.number().int().min(1).max(500),
+  // Minimum 5, not 1 (changed 2026-08-05): the checkout UI states and enforces a 5-kit minimum,
+  // so the server enforces it too. pricing.service.js re-checks the same bound, since it is the
+  // last thing between an order and a persisted money column.
+  totalKits:  z.coerce.number().int().min(5).max(500),
   primarySize: z.enum(['S', 'M', 'L', 'XL', 'Custom']),
   instructions: optionalText(1000),
   // Accepted so the request validates, then IGNORED. Never trusted, never stored.

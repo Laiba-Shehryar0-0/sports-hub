@@ -214,10 +214,10 @@ const total     = kitPrice + delivery.price - discount;
 - **No hard minimum-order enforcement in the arithmetic.** The UI text says "Minimum order: 5
   kits" and the quantity stepper's decrement button floors at `Math.max(5, q - 1)`
   (`Checkout.jsx:187`), but nothing stops a value below 5 from reaching `/orders` over the wire —
-  the floor is a UI nicety, not a validation rule. **This conflicts with the documented backend
-  bound** (CLAUDE.md rule 9 / `backend-plan.md` §4: `totalKits` 1–500). Worth confirming whether
-  the backend should also enforce a minimum of 5, since the UI clearly intends one but the
-  contract/plan only specify a floor of 1.
+  the floor was a UI nicety, not a validation rule. **RESOLVED 2026-08-05: the backend bound is
+  now `totalKits` 5–500**, enforced in `pricing.service.js` and in CLAUDE.md rule 9 /
+  `backend-plan.md` §4. The 5-kit minimum the UI advertises is now real on the server, so a
+  hand-crafted request for 1 kit is rejected rather than priced.
 
 ### 2. Hardcoded promo codes (`Checkout.jsx:24`)
 
@@ -306,9 +306,10 @@ that the backend is required to discard entirely (CLAUDE.md rule 2 / `backend-pl
    `''` with a 422, because `.default()` only fills in for `undefined`, not for a value that's
    present but fails `.min(2)`. Needs the same `z.union(['', ...])`-with-fallback treatment as the
    other optional text fields, or the frontend needs to stop allowing an empty country.
-3. **Minimum order of 5 kits is UI-only.** The checkout screen enforces (and states) a 5-kit
-   minimum, but neither `API_CONTRACT.md` nor the documented `totalKits` bound (1–500) encodes
-   that floor. Worth confirming whether the backend should reject `totalKits < 5`.
+3. ~~**Minimum order of 5 kits is UI-only.**~~ **RESOLVED 2026-08-05.** The documented bound was
+   1–500 while the checkout screen enforced and advertised a 5-kit minimum. The backend bound is
+   now 5–500, enforced by `pricing.service.js` (`PRICING_INVALID_QUANTITY`) and reflected in
+   CLAUDE.md rule 9 and `backend-plan.md` §4. `API_CONTRACT.md` never stated a bound either way.
 
 ---
 

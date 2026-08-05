@@ -72,7 +72,9 @@ Never `res.status(500)` inside a controller.
 8. **Optional contract fields arrive as EMPTY STRINGS, not undefined.** `z.string().email()`
    fails on `''`. Use an explicit `z.union([z.literal(''), ...])` for optional email/phone/
    province/postalCode/clubName/customSize/instructions.
-9. **Every array, string and number is bounded**: `totalKits` 1–500, `playerName` ≤20,
+9. **Every array, string and number is bounded**: `totalKits` 5–500 (5 is the minimum order the
+   checkout UI states and enforces; the server enforces it too so the floor is real, not a
+   client-side nicety — changed from 1 on 2026-08-05), `playerName` ≤20,
    `playerNumber` `/^\d{0,3}$/`, `instructions` ≤1000, `logoDataUrl` ≤8MB.
 10. **`express.json()` limit is 100kb globally**, raised to 6mb on the `/orders` route only.
 11. **Orders use `idempotency_key`** with a unique index. A duplicate returns the existing
