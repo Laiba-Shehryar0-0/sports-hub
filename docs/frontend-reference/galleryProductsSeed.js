@@ -1,4 +1,4 @@
-// Snapshot of ../kit-frontend as of 2026-08-04 — reference only, do not edit here.
+// Snapshot of ../kit-frontend as of 2026-08-05 — reference only, do not edit here.
 // Source: src/data/galleryProductsSeed.js
 
 import cricketShirtImg    from '../assets/cricket-shirt-front.png';
@@ -20,7 +20,7 @@ export const GALLERY_PRODUCTS_SEED = [
   { id: 3,  image: cricketSweaterImg,   name: 'Cricket Sweater',    cat: 'cricket',    color: '#4a0010' },
   { id: 4,  image: footballJerseyImg,   name: 'Football Jersey',    cat: 'football',   color: '#7a3a00' },
   { id: 5,  image: footballShortsImg,   name: 'Football Shorts',    cat: 'football',   color: '#0a1a3a' },
-  { id: 6,  image: goalkeeperKitImg,    name: 'Goalkeeper Kit',     cat: 'football',   color: '#2a1a0a' },
+  { id: 6,  image: goalkeeperKitImg,    name: 'Goalkeeper Shirt',     cat: 'football',   color: '#2a1a0a' },
   { id: 7,  image: basketballJerseyImg, name: 'Basketball Jersey',  cat: 'basketball', color: '#1a2a4a' },
   { id: 8,  image: basketballShortsImg, name: 'Basketball Shorts',  cat: 'basketball', color: '#1a3a1a' },
   { id: 9,  image: trainingTShirtImg,   name: 'Training T-Shirt',   cat: 'training',   color: '#4a0010' },

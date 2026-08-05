@@ -15,6 +15,7 @@ import { asyncHandler } from './utils/asyncHandler.js';
 import { AppError } from './utils/AppError.js';
 import catalogRouter from './modules/catalog/catalog.routes.js';
 import authRouter from './modules/auth/auth.routes.js';
+import ordersRouter from './modules/orders/orders.routes.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const staticRoot = path.join(__dirname, '..', 'public', 'static');
@@ -78,9 +79,12 @@ export function createApp() {
   // catalogRouter above, which declares full paths and mounts at /api.
   app.use('/api/auth', authRouter);
 
+  // ordersRouter mounts its own 6mb express.json() internally — the global 100kb cap above
+  // stays in force for every other route (CLAUDE.md rule 10).
+  app.use('/api/orders', ordersRouter);
+
   // Remaining feature routers mount here, e.g.:
   // app.use('/api/contact', contactRouter);
-  // app.use('/api/orders', ordersRouter);
 
   app.use(notFound);
   app.use(errorHandler);

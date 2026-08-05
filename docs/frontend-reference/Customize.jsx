@@ -1,4 +1,4 @@
-// Snapshot of ../kit-frontend as of 2026-08-04 — reference only, do not edit here.
+// Snapshot of ../kit-frontend as of 2026-08-05 — reference only, do not edit here.
 // Source: src/pages/Customize.jsx
 
 import { useState, useRef, useCallback, useEffect } from 'react';
@@ -85,7 +85,7 @@ const SPORT_KIT_GROUPS = [
     items: [
       { id: 'football-jersey', label: 'Football Jersey', image: footballJerseyImg, kitType: 'jersey' },
       { id: 'football-shorts', label: 'Football Shorts', image: footballShortsImg, imageBack: footballShortsBackImg, kitType: 'shorts' },
-      { id: 'goalkeeper-kit',  label: 'Goalkeeper Kit',  image: goalkeeperKitImg,  imageBack: goalkeeperKitBackImg,  kitType: 'jersey' },
+      { id: 'goalkeeper-kit',  label: 'Goalkeeper Shirt',  image: goalkeeperKitImg,  imageBack: goalkeeperKitBackImg,  kitType: 'jersey' },
       { id: 'training-bib',    label: 'Training Bib',    image: trainingBibImg,    imageBack: trainingBibBackImg,    kitType: 'jersey' },
     ],
   },

@@ -1,7 +1,7 @@
-// Snapshot of ../kit-frontend as of 2026-08-04 — reference only, do not edit here.
+// Snapshot of ../kit-frontend as of 2026-08-05 — reference only, do not edit here.
 // Source: src/pages/Checkout.jsx
 
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import KitPreview from '../customize/KitPreview';
 import { required, validateFields } from '../utils/validation';
@@ -53,6 +53,10 @@ export default function Checkout() {
   const [errors, setErrors] = useState({});
   const [placed, setPlaced] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  // One key per checkout ATTEMPT, not per request. A double-click, or a retry after a submit
+  // that timed out but actually succeeded, must reuse this or the server creates two orders.
+  // useRef so regenerating it never triggers a render.
+  const idempotencyKeyRef = useRef(crypto.randomUUID());
   const [submitError, setSubmitError] = useState('');
 
   useEffect(() => {
@@ -125,7 +129,9 @@ export default function Checkout() {
           deliveryName: delivery.name, deliveryPrice: delivery.price,
           discount, promoApplied, total,
         },
-      });
+      }, idempotencyKeyRef.current);
+      // Succeeded — any further order placed from this screen is genuinely a new one.
+      idempotencyKeyRef.current = crypto.randomUUID();
       setPlaced(true);
     } catch (err) {
       setSubmitError(err.message || 'Could not place your order. Please try again.');

@@ -1,4 +1,4 @@
-// Snapshot of ../kit-frontend as of 2026-08-04 — reference only, do not edit here.
+// Snapshot of ../kit-frontend as of 2026-08-05 — reference only, do not edit here.
 // Source: src/data/kitsSeed.js
 
 import cricketShirtImg from '../assets/cricket-shirt-front.png';
@@ -28,7 +28,7 @@ export const KITS_SEED = [
   { id: 3,  slug: 'cricket-sweater',  emoji: '🏏', image: cricketSweaterImg, name: 'Cricket Sweater',     sport: 'cricket',    desc: 'V-neck wool cricket sweater with team colors.', color: '#4a0010' },
   { id: 4,  slug: 'football-jersey',  emoji: '⚽', image: footballJerseyImg, name: 'Football Jersey',     sport: 'football',   desc: 'Lightweight moisture-wicking football jersey.', color: '#7a3a00' },
   { id: 5,  slug: 'football-shorts',  emoji: '⚽', image: footballShortsImg, name: 'Football Shorts',     sport: 'football',   desc: 'Elasticated football shorts with side pockets.', color: '#0a1a3a' },
-  { id: 6,  slug: 'goalkeeper-kit',   emoji: '⚽', image: goalkeeperKitImg, name: 'Goalkeeper Kit',      sport: 'football',   desc: 'High-visibility goalkeeper jersey and shorts set.', color: '#2a1a0a' },
+  { id: 6,  slug: 'goalkeeper-kit',   emoji: '⚽', image: goalkeeperKitImg, name: 'Goalkeeper Shirt',    sport: 'football',   desc: 'High-visibility goalkeeper jersey with padded elbows.', color: '#2a1a0a' },
   { id: 7,  slug: 'basketball-jersey', emoji: '🏀', image: basketballJerseyImg, name: 'Basketball Jersey',   sport: 'basketball', desc: 'Mesh-panelled basketball jersey for maximum breathability.', color: '#0a1a3a' },
   { id: 8,  slug: 'basketball-shorts', emoji: '🏀', image: basketballShortsImg, name: 'Basketball Shorts',   sport: 'basketball', desc: 'Loose-fit basketball shorts with drawstring.', color: '#1a3a1a' },
   { id: 9,  slug: 'training-tshirt',  emoji: '💪', image: trainingTShirtImg, name: 'Training T-Shirt',    sport: 'training',   desc: 'Comfortable training tee in moisture-wicking fabric.', color: '#4a0010' },
@@ -40,7 +40,7 @@ export const KITS_SEED = [
   { id: 15, slug: 'warmup-suit',      emoji: '🧥', image: warmupSuitImg,     name: 'Warm-up Suit',       sport: 'basketball', desc: 'Full-body warm-up suit for pre-game preparation.', color: '#7a3a00' },
   { id: 16, slug: 'tracksuit',        emoji: '👟', image: tracksuitImg,      name: 'Tracksuit',           sport: 'training',   desc: 'Comfortable full-body tracksuit for training sessions.', color: '#2a0a4a' },
   { id: 17, slug: 'team-socks',       emoji: '🧦', image: teamSocksImg,      name: 'Team Socks',          sport: 'others',     desc: 'Knee-high team socks in matching club colours, cushioned sole and ribbed cuff.', color: '#0a3a1a' },
-  { id: 18, slug: 'hockey-kit',       emoji: '🏑', image: hockeyKitImg,      name: 'Hockey Shirt',        sport: 'others',     desc: 'Durable hockey jersey and shorts for field play.', color: '#4a0010' },
-  { id: 19, slug: 'cycling-kit',      emoji: '🚴', image: cyclingKitImg,     name: 'Cycling Shirt',       sport: 'others',     desc: 'Aerodynamic cycling jersey and shorts.', color: '#0a1a3a' },
+  { id: 18, slug: 'hockey-kit',       emoji: '🏑', image: hockeyKitImg,      name: 'Hockey Shirt',        sport: 'others',     desc: 'Durable hockey shirt built for field play.', color: '#4a0010' },
+  { id: 19, slug: 'cycling-kit',      emoji: '🚴', image: cyclingKitImg,     name: 'Cycling Shirt',       sport: 'others',     desc: 'Aerodynamic close-fit cycling shirt with a full-length zip.', color: '#0a1a3a' },
   { id: 20, slug: 'rugby-kit',        emoji: '🏉', image: rugbyKitImg,       name: 'Rugby Shirt',         sport: 'others',     desc: 'Heavy-duty rugby jersey built for contact sport.', color: '#3a1a0a' },
 ];

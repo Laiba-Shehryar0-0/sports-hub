@@ -53,7 +53,7 @@ VALUES
   ('cricket-sweater', 'Cricket Sweater', 'cricket', '🏏', '/static/kits/cricket-sweater-front.png', 'V-neck wool cricket sweater with team colors.', '#4a0010', 0, NULL, NULL, NULL, NULL, 3, 1),
   ('football-jersey', 'Football Jersey', 'football', '⚽', '/static/kits/football-jersey-front.png', 'Lightweight moisture-wicking football jersey.', '#7a3a00', 0, NULL, NULL, NULL, NULL, 4, 1),
   ('football-shorts', 'Football Shorts', 'football', '⚽', '/static/kits/football-shorts-front.png', 'Elasticated football shorts with side pockets.', '#0a1a3a', 0, NULL, NULL, NULL, NULL, 5, 1),
-  ('goalkeeper-kit', 'Goalkeeper Kit', 'football', '⚽', '/static/kits/goalkeeperkit-front.png', 'High-visibility goalkeeper jersey and shorts set.', '#2a1a0a', 0, NULL, NULL, NULL, NULL, 6, 1),
+  ('goalkeeper-kit', 'Goalkeeper Shirt', 'football', '⚽', '/static/kits/goalkeeperkit-front.png', 'High-visibility goalkeeper jersey with padded elbows.', '#2a1a0a', 0, NULL, NULL, NULL, NULL, 6, 1),
   ('basketball-jersey', 'Basketball Jersey', 'basketball', '🏀', '/static/kits/basketball-jersey-front.png', 'Mesh-panelled basketball jersey for maximum breathability.', '#0a1a3a', 0, NULL, NULL, NULL, NULL, 7, 1),
   ('basketball-shorts', 'Basketball Shorts', 'basketball', '🏀', '/static/kits/basketball-shorts-front.png', 'Loose-fit basketball shorts with drawstring.', '#1a3a1a', 0, NULL, NULL, NULL, NULL, 8, 1),
   ('training-tshirt', 'Training T-Shirt', 'training', '💪', '/static/kits/training-T-shit-front.png', 'Comfortable training tee in moisture-wicking fabric.', '#4a0010', 0, NULL, NULL, NULL, NULL, 9, 1),
@@ -65,8 +65,8 @@ VALUES
   ('warmup-suit', 'Warm-up Suit', 'basketball', '🧥', '/static/kits/warmup-suit-front.png', 'Full-body warm-up suit for pre-game preparation.', '#7a3a00', 0, NULL, NULL, NULL, NULL, 15, 1),
   ('tracksuit', 'Tracksuit', 'training', '👟', '/static/kits/tracksuit-front.png', 'Comfortable full-body tracksuit for training sessions.', '#2a0a4a', 0, NULL, NULL, NULL, NULL, 16, 1),
   ('team-socks', 'Team Socks', 'others', '🧦', '/static/kits/team-socks.png', 'Knee-high team socks in matching club colours, cushioned sole and ribbed cuff.', '#0a3a1a', 0, NULL, NULL, NULL, NULL, 17, 1),
-  ('hockey-kit', 'Hockey Shirt', 'others', '🏑', '/static/kits/hockey-kit-front.png', 'Durable hockey jersey and shorts for field play.', '#4a0010', 0, NULL, NULL, NULL, NULL, 18, 1),
-  ('cycling-kit', 'Cycling Shirt', 'others', '🚴', '/static/kits/cycling-kit-front.png', 'Aerodynamic cycling jersey and shorts.', '#0a1a3a', 0, NULL, NULL, NULL, NULL, 19, 1),
+  ('hockey-kit', 'Hockey Shirt', 'others', '🏑', '/static/kits/hockey-kit-front.png', 'Durable hockey shirt built for field play.', '#4a0010', 0, NULL, NULL, NULL, NULL, 18, 1),
+  ('cycling-kit', 'Cycling Shirt', 'others', '🚴', '/static/kits/cycling-kit-front.png', 'Aerodynamic close-fit cycling shirt with a full-length zip.', '#0a1a3a', 0, NULL, NULL, NULL, NULL, 19, 1),
   ('rugby-kit', 'Rugby Shirt', 'others', '🏉', '/static/kits/rugby-kit-front.png', 'Heavy-duty rugby jersey built for contact sport.', '#3a1a0a', 0, NULL, NULL, NULL, NULL, 20, 1),
   -- Featured-only rows (FEATURED_KITS_SEED). Slugs (`featured-*-kit`) are
   -- invented — the source has no slug field for these.

@@ -1,6 +1,7 @@
 import rateLimit from 'express-rate-limit';
 import { ipKey } from '../utils/ipKey.js';
 import { normalizeEmail } from '../utils/normalizeEmail.js';
+import { env } from '../config/env.js';
 
 // Default key for every limiter. Supplying any custom keyGenerator bypasses express-rate-limit's
 // own IP handling, so IPv6 normalization is ours to do — see src/utils/ipKey.js for why /64.
@@ -11,6 +12,11 @@ function makeLimiter({ windowMs, max, message, keyGenerator = requestIpKey }) {
     windowMs,
     max,
     keyGenerator,
+    // Disabled under NODE_ENV=test. Every request in a suite comes from the same IP, so the
+    // limiter would exhaust partway through and fail unrelated assertions with a 429 — as it
+    // did on the first run of the orders suite. Limiter behaviour is verified separately against
+    // a live server, where the counters are real.
+    skip: () => env.NODE_ENV === 'test',
     standardHeaders: true,
     legacyHeaders: false,
     handler(req, res) {
