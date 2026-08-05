@@ -3,6 +3,7 @@
 
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { useNavigate, useSearchParams, Link } from 'react-router-dom';
+import { useAuth } from '../context/AuthContext';
 import KitPreview from '../customize/KitPreview';
 import useHistoryState from '../hooks/useHistoryState';
 import {
@@ -61,7 +62,7 @@ import tracksuitBackImg from '../assets/tracksuit-back.png';
 import warmupSuitImg from '../assets/warmup-suit-front.png';
 import trainingBibImg from '../assets/training-bib-front.png';
 import trainingBibBackImg from '../assets/training-bib-back.png';
-import boxingKitImg from '../assets/boxing-kit.png';
+import teamSocksImg from '../assets/team-socks.png';
 import hockeyKitImg from '../assets/hockey-kit-front.png';
 import cyclingKitImg from '../assets/cycling-kit-front.png';
 import cyclingKitBackImg from '../assets/cycling-kit-back.png';
@@ -109,7 +110,7 @@ const SPORT_KIT_GROUPS = [
   {
     id: 'others', label: 'Others',
     items: [
-      { id: 'boxing-kit',  label: 'Boxing Gloves',  image: boxingKitImg,  kitType: 'shorts' },
+      { id: 'team-socks', label: 'Team Socks',     image: teamSocksImg,  kitType: 'socks' },
       { id: 'hockey-kit',  label: 'Hockey Shirt',   image: hockeyKitImg,  kitType: 'jersey' },
       { id: 'cycling-kit', label: 'Cycling Shirt',  image: cyclingKitImg, imageBack: cyclingKitBackImg, kitType: 'jersey' },
       { id: 'rugby-kit',   label: 'Rugby Shirt',    image: rugbyKitImg,   imageBack: rugbyKitBackImg,   kitType: 'jersey' },
@@ -171,6 +172,7 @@ export default function Customize() {
   const fileInputRef = useRef(null);
   const panState = useRef({ dragging: false, startX: 0, startY: 0, originX: 0, originY: 0 });
   const navigate = useNavigate();
+  const { user, openSignIn } = useAuth();
 
   const selectTool = useCallback((tool, tab) => {
     setActiveTool(tool);
@@ -299,6 +301,21 @@ export default function Customize() {
     reader.readAsDataURL(file);
   }, [patch]);
 
+  const openFilePicker = useCallback(() => fileInputRef.current?.click(), []);
+
+  /**
+   * Wraps an action so a logged-out user gets the auth modal instead of a silent no-op. The
+   * intent is handed to the modal, which resumes it on success and leaves the user on this page.
+   */
+  const gated = useCallback((id, label, run) => () => {
+    if (user) return run();
+    openSignIn({ id, label, run });
+  }, [user, openSignIn]);
+
+  const guardedSave = gated('customize:save', 'save your design', handleSave);
+  const guardedExport = gated('customize:export', 'export your design', handleExport);
+  const guardedUpload = gated('customize:upload', 'upload a logo', openFilePicker);
+
   const handlePlaceOrder = useCallback(() => {
     try { localStorage.setItem(DESIGN_STORAGE_KEY, JSON.stringify(design)); } catch { /* storage unavailable */ }
     navigate('/checkout');
@@ -326,8 +343,8 @@ export default function Customize() {
         <div className={topbarRightCls}>
           <ToolBtn onClick={undo} disabled={!canUndo} title="Undo"><IconUndo /></ToolBtn>
           <ToolBtn onClick={redo} disabled={!canRedo} title="Redo"><IconRedo /></ToolBtn>
-          <ToolBtn onClick={handleSave} title="Save"><IconSave /></ToolBtn>
-          <button onClick={handleExport} className={`btn btn-grey ${exportBtnCls}`}>
+          <ToolBtn onClick={guardedSave} title="Save"><IconSave /></ToolBtn>
+          <button onClick={guardedExport} className={`btn btn-grey ${exportBtnCls}`}>
             <IconExport /> Export
           </button>
           <button onClick={handlePlaceOrder} className={`btn btn-darkred ${exportBtnCls}`}>
@@ -448,6 +465,7 @@ export default function Customize() {
               <AssetsPanel
                 design={design} patch={patch}
                 fileInputRef={fileInputRef}
+                onUploadClick={guardedUpload}
                 onFile={handleLogoFile}
               />
             )}
@@ -880,7 +898,7 @@ function DrawPanel({ side }) {
 }
 
 /* ── Assets Panel ───────────────────────────────────────────── */
-function AssetsPanel({ design, patch, fileInputRef, onFile }) {
+function AssetsPanel({ design, patch, fileInputRef, onFile, onUploadClick }) {
   const [dragOver, setDragOver] = useState(false);
 
   return (
@@ -889,7 +907,7 @@ function AssetsPanel({ design, patch, fileInputRef, onFile }) {
         <h3 className={labelCls}>Upload Logo / Badge</h3>
         <div
           className={dropzoneCls(dragOver)}
-          onClick={() => fileInputRef.current?.click()}
+          onClick={onUploadClick}
           onDragOver={e => { e.preventDefault(); setDragOver(true); }}
           onDragLeave={() => setDragOver(false)}
           onDrop={e => { e.preventDefault(); setDragOver(false); onFile(e.dataTransfer.files?.[0]); }}

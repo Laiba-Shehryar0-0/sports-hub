@@ -3,6 +3,7 @@
 
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useAuth } from '../context/AuthContext';
 import { Canvas, PencilBrush, Textbox, FabricImage, Ellipse, Polygon, Path } from 'fabric';
 import KitPreview from './KitPreview';
 import { COLOR_PALETTE, FONTS, loadStoredDesign, DRAWN_LOGO_KEY, saveEditedKitImage, KIT_CANVAS_STATE_KEY } from './kitShapes';
@@ -226,6 +227,7 @@ function floodFill(imageData, startX, startY, fillRgba, tolerance = 32) {
  */
 export default function KitCanvasEditor({ mode, initialSide = 'front' }) {
   const navigate = useNavigate();
+  const { user, openSignIn } = useAuth();
   const canvasElRef = useRef(null);
   const fabricRef = useRef(null);
   const loadingRef = useRef(false);
@@ -585,6 +587,13 @@ export default function KitCanvasEditor({ mode, initialSide = 'front' }) {
   // eslint-disable-next-line no-unused-expressions
   historyTick;
 
+  // Gated: a logged-out user gets the auth modal, then the download resumes automatically
+  // and they stay in the editor rather than being navigated to the homepage.
+  const guardedExportPNG = () => {
+    if (user) return exportPNG();
+    openSignIn({ id: 'kit-editor:export', label: 'export your design', run: exportPNG });
+  };
+
   const exportPNG = () => {
     const canvas = fabricRef.current;
     const url = canvas.toDataURL({ format: 'png', multiplier: EXPORT_MULTIPLIER });
@@ -663,7 +672,7 @@ export default function KitCanvasEditor({ mode, initialSide = 'front' }) {
         <div className={topbarRightCls}>
           <button className={iconBtnCls(false)} onClick={handleUndo} disabled={!canUndo} title="Undo"><IconUndo /></button>
           <button className={iconBtnCls(false)} onClick={handleRedo} disabled={!canRedo} title="Redo"><IconRedo /></button>
-          <button onClick={exportPNG} className={`btn btn-grey ${exportBtnCls}`}>
+          <button onClick={guardedExportPNG} className={`btn btn-grey ${exportBtnCls}`}>
             <IconExport /> Export PNG
           </button>
           {mode === 'logo' && (

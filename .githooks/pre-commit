@@ -1,0 +1,43 @@
+#!/bin/sh
+#
+# Blocks a commit that would introduce broken SQL under src/db/.
+#
+# This exists because stray text (" 1  Q") was once typed into the head of
+# src/db/seeds/002_pricing.sql and committed. 001_kits.sql still applied, so the
+# catalog looked fine, but kit_prices and delivery_methods were never populated.
+# Nobody noticed for days: an already-seeded local database keeps working, and
+# only a fresh setup would have hit it. `npm run check:seeds` catches it — but a
+# check nobody remembers to run is not a control, so it runs here automatically.
+#
+# Installed via core.hooksPath (see the `prepare` script in package.json), so it
+# lives in the repo and survives a clone, unlike .git/hooks.
+
+set -e
+
+staged=$(git diff --cached --name-only --diff-filter=ACM | grep -E '^src/db/.*\.sql$' || true)
+
+# Nothing relevant staged — stay out of the way. This keeps the hook off the
+# critical path for the vast majority of commits.
+if [ -z "$staged" ]; then
+  exit 0
+fi
+
+echo "pre-commit: SQL staged under src/db/ — validating"
+
+# check-seeds.mjs reads the working tree, not the index. For the failure mode
+# this guards against (stray keystrokes, then commit) those are identical, but
+# warn when they are not so the result isn't trusted more than it deserves.
+for file in $staged; do
+  if ! git diff --quiet -- "$file" 2>/dev/null; then
+    echo "  warning: $file has unstaged changes — validating the working tree, not the staged blob"
+  fi
+done
+
+if npm run --silent check:seeds; then
+  exit 0
+fi
+
+echo ""
+echo "pre-commit: BLOCKED — SQL under src/db/ failed validation (see above)."
+echo "Fix the file, or bypass with 'git commit --no-verify' if you are certain."
+exit 1

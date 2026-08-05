@@ -44,11 +44,23 @@ export const orderLimiter = makeLimiter({
   message: 'Too many orders from this address. Please try again later.',
 });
 
-// Login/register brute-force protection, per IP. Applied to /login AND /register, so both share
-// one per-IP budget — that's what caps a spray across many different accounts.
+// Brute-force protection, per IP. Applied to ALL FOUR auth routes — /register, /login, /verify
+// and /resend — so they share one budget. That shared scope is why this number is not small.
+//
+// 60/15min is deliberate; do not tighten it back without a specific reason. At 20 a single user
+// having a bad few minutes (register, a few wrong passwords, a fumbled code, a resend) could
+// exhaust it alone — and behind NAT, an office or mobile carrier shares one egress IP, so that
+// one fumbled signup locked out everyone else on it.
+//
+// Raising it is safe because this limiter never did the per-account work:
+//   - loginLimiter caps per IP+email at 10/15min (per-account brute force)
+//   - the DB caps 5 attempts per code, 10 resends, 60s cooldown — and unlike this in-memory
+//     store, those survive a restart
+// What this limiter uniquely stops is a spray across many accounts from one IP; 60/15min still
+// bounds that to 4/min against a uniform 401 with ~40ms of argon2 per attempt.
 export const authLimiter = makeLimiter({
   windowMs: 15 * 60 * 1000,
-  max: 20,
+  max: 60,
   message: 'Too many attempts. Please try again later.',
 });
 

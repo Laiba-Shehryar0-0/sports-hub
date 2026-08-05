@@ -35,6 +35,19 @@ unreachable there, but the branch should not survive into a release build regard
 
 ---
 
+## 🟠 `team-socks` uses a placeholder image showing boxing gloves
+
+`public/static/kits/team-socks.png` (and its frontend twin `src/assets/team-socks.png`) is the
+**old `boxing-kit.png` renamed** — the picture is a pair of boxing gloves, not socks. The product
+row, slug, name, description, `kitType: 'socks'` and the SVG silhouette are all correct; only the
+catalog thumbnail is wrong.
+
+Replace both copies with the real artwork (same filename, so no code or seed change is needed),
+then re-run `npm run seed` only if `image_url` changes. `npm run sync:reference` keeps the
+`docs/frontend-reference/` mirrors in step.
+
+---
+
 ## 🟠 The pending verification token is single-valued
 
 `email_verifications.token_hash` holds one token per signup. Any path that issues a new one —

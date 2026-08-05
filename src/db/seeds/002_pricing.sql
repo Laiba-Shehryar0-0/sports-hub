@@ -1,4 +1,4 @@
- 1  Q-- kit_prices and delivery_methods, verbatim from BASE_PRICES / DELIVERY_METHODS
+-- kit_prices and delivery_methods, verbatim from BASE_PRICES / DELIVERY_METHODS
 -- in docs/frontend-reference/kitShapes.js. Must match the customizer's own
 -- checkout arithmetic exactly, or every order logs a price_mismatch warning.
 -- ON DUPLICATE KEY UPDATE makes re-running this file safe.
