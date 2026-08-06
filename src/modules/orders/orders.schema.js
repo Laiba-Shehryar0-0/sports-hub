@@ -1,5 +1,8 @@
 import { z } from 'zod';
 import { MIN_TOTAL_KITS, MAX_TOTAL_KITS } from '../pricing/pricing.constants.js';
+import {
+  SHIPPING_COUNTRIES, DOMESTIC_COUNTRY, allowedDeliveryIds, isDeliveryAllowedForCountry,
+} from './orders.constants.js';
 
 /**
  * The full order payload, transcribed from docs/schemas-draft.md — which corrected
@@ -102,10 +105,10 @@ export const createOrderSchema = z.object({
     city: z.string().trim().min(1).max(100),
     province: optionalText(100),
     postalCode: optionalText(20),
-    // Empty-string tolerant: Checkout.jsx defaults it to 'Pakistan' but has no required-validation
-    // on it, so a user can clear the field and submit ''. .default() only fills undefined, so a
-    // bare .min(2) would 422 a form the UI treats as valid (docs/EXTRACTED.md discrepancy #2).
-    country: z.union([z.literal(''), z.string().trim().min(2).max(80)]).optional().default(''),
+    // A fixed list, not free text. This also RESOLVES docs/EXTRACTED.md discrepancy #2: country
+    // could previously be submitted as '' because the old TextField had no required-validation.
+    // A dropdown always has a value, so '' is no longer producible and no longer accepted.
+    country: z.enum(SHIPPING_COUNTRIES),
   }).strict(),
   deliveryId: z.enum(['standard', 'express', 'rush', 'international']),
   paymentId: z.enum(['card', 'bank', 'cod']),
@@ -118,7 +121,24 @@ export const createOrderSchema = z.object({
   // would be wasted, and rejecting a malformed one would break checkout for no security gain.
   // The service reads only `pricing.total`, and only to log a price_mismatch warning.
   pricing: z.any().optional(),
-}).strict();
+}).strict().superRefine((order, ctx) => {
+  // Cross-field rule: the delivery method must match where the parcel is going.
+  //
+  // Enforced here, not only in the UI, because the UI constraint is bypassable by a crafted
+  // request — and the failure mode is a free domestic courier rate on an international address,
+  // which is unfulfillable and a direct revenue loss.
+  if (!isDeliveryAllowedForCountry(order.address.country, order.deliveryId)) {
+    const allowed = allowedDeliveryIds(order.address.country);
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['deliveryId'],
+      message: order.address.country === DOMESTIC_COUNTRY
+        ? 'International shipping is only for addresses outside Pakistan.'
+        : 'Orders shipping outside Pakistan must use International Shipping.',
+      params: { allowed },
+    });
+  }
+});
 
 // A UUID sent per checkout attempt so a double-click returns the first order rather than
 // creating a second. Optional: the frontend did not send one historically, and an order without

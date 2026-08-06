@@ -7,6 +7,9 @@ import KitPreview from '../customize/KitPreview';
 import { required, validateFields } from '../utils/validation';
 import { placeOrder } from '../api/ordersService';
 import {
+  SHIPPING_COUNTRIES, DOMESTIC_COUNTRY, allowedDeliveryIds, isDeliveryAllowedForCountry,
+} from '../data/countries';
+import {
   KIT_TYPES, SPORTS, SIZES, DESIGN_TEMPLATES, BASE_PRICES,
   DELIVERY_METHODS, QUANTITY_PRESETS, PAYMENT_METHODS, loadStoredDesign, loadEditedKitImage,
 } from '../customize/kitShapes';
@@ -82,6 +85,16 @@ export default function Checkout() {
   const setContactField = setField(setContact);
   const setAddressField = setField(setAddress);
   const setCardField = setField(setCard);
+
+  /**
+   * Changing country can invalidate the selected delivery method, so they move together.
+   * Leaving a now-illegal deliveryId in state would submit an order the API rejects with a
+   * cross-field 422 the user has no obvious way to act on.
+   */
+  const setCountry = useCallback((country) => {
+    setAddress(prev => ({ ...prev, country }));
+    setDeliveryId(prev => (isDeliveryAllowedForCountry(country, prev) ? prev : allowedDeliveryIds(country)[0]));
+  }, []);
 
   const applyPromo = useCallback(() => {
     const code = promoCode.trim().toUpperCase();
@@ -247,18 +260,38 @@ export default function Checkout() {
               <TextField label="Province" value={address.province} onChange={v => setAddressField('province', v)} />
               <TextField label="Postal Code" value={address.postalCode} onChange={v => setAddressField('postalCode', v)} />
             </div>
-            <TextField label="Country" value={address.country} onChange={v => setAddressField('country', v)} />
+            <div className="flex flex-col gap-[6px]">
+              <label htmlFor="checkout-country" className="text-[11px] font-bold tracking-[0.3px] text-onsurface-500">Country</label>
+              <select
+                id="checkout-country"
+                value={address.country}
+                onChange={e => setCountry(e.target.value)}
+                className={inputCls}
+              >
+                {SHIPPING_COUNTRIES.map(c => <option key={c} value={c}>{c}</option>)}
+              </select>
+              {address.country !== DOMESTIC_COUNTRY && (
+                <p className="text-[11.5px] text-onsurface-600">
+                  Orders outside Pakistan ship via International Shipping.
+                </p>
+              )}
+            </div>
           </Card>
 
           <Card step={4} title="Delivery Method">
             <div className="flex flex-col gap-2">
               {DELIVERY_METHODS.map(m => {
                 const active = deliveryId === m.id;
+                // Domestic couriers can't serve an address abroad, and DHL isn't for a Pakistan
+                // address. The server enforces the same rule, so this is UX, not the control.
+                const allowed = isDeliveryAllowedForCountry(address.country, m.id);
                 return (
                   <button
                     key={m.id}
-                    onClick={() => setDeliveryId(m.id)}
-                    className="flex items-center gap-4 p-4 bg-surface-600 border-[1.5px] border-line rounded-md cursor-pointer text-left transition-[all_180ms_ease] hover:border-onsurface-500"
+                    onClick={() => allowed && setDeliveryId(m.id)}
+                    disabled={!allowed}
+                    title={allowed ? undefined : `Not available for ${address.country}.`}
+                    className={`flex items-center gap-4 p-4 bg-surface-600 border-[1.5px] border-line rounded-md text-left transition-[all_180ms_ease] ${allowed ? 'cursor-pointer hover:border-onsurface-500' : 'opacity-40 cursor-not-allowed'}`}
                   >
                     <span className={`w-[18px] h-[18px] rounded-full border-2 flex-shrink-0 relative ${active ? 'border-onsurface-100 after:content-[\'\'] after:absolute after:inset-[3px] after:rounded-full after:bg-onsurface-100' : 'border-line-strong'}`} />
                     <span className="flex-1 flex flex-col gap-[3px]">

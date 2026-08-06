@@ -64,7 +64,7 @@ VALUES
   ('training-bib', 'Training Bib', 'football', '🎽', '/static/kits/training-bib-front.png', 'Lightweight mesh training bib for team drills.', '#0a1a3a', 0, NULL, NULL, NULL, NULL, 14, 1),
   ('warmup-suit', 'Warm-up Suit', 'basketball', '🧥', '/static/kits/warmup-suit-front.png', 'Full-body warm-up suit for pre-game preparation.', '#7a3a00', 0, NULL, NULL, NULL, NULL, 15, 1),
   ('tracksuit', 'Tracksuit', 'training', '👟', '/static/kits/tracksuit-front.png', 'Comfortable full-body tracksuit for training sessions.', '#2a0a4a', 0, NULL, NULL, NULL, NULL, 16, 1),
-  ('team-socks', 'Team Socks', 'others', '🧦', '/static/kits/team-socks.png', 'Knee-high team socks in matching club colours, cushioned sole and ribbed cuff.', '#0a3a1a', 0, NULL, NULL, NULL, NULL, 17, 1),
+  ('team-socks', 'Team Socks', 'others', '🧦', '/static/kits/socks.png', 'Knee-high team socks with cushioned sole and ribbed cuff.', '#0a3a1a', 0, NULL, NULL, NULL, NULL, 17, 1),
   ('hockey-kit', 'Hockey Shirt', 'others', '🏑', '/static/kits/hockey-kit-front.png', 'Durable hockey shirt built for field play.', '#4a0010', 0, NULL, NULL, NULL, NULL, 18, 1),
   ('cycling-kit', 'Cycling Shirt', 'others', '🚴', '/static/kits/cycling-kit-front.png', 'Aerodynamic close-fit cycling shirt with a full-length zip.', '#0a1a3a', 0, NULL, NULL, NULL, NULL, 19, 1),
   ('rugby-kit', 'Rugby Shirt', 'others', '🏉', '/static/kits/rugby-kit-front.png', 'Heavy-duty rugby jersey built for contact sport.', '#3a1a0a', 0, NULL, NULL, NULL, NULL, 20, 1),

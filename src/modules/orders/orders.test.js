@@ -7,6 +7,7 @@ import sharp from 'sharp';
 import { createApp } from '../../app.js';
 import { pool, closePool } from '../../db/pool.js';
 import { env } from '../../config/env.js';
+import { SHIPPING_COUNTRIES } from './orders.constants.js';
 
 const app = createApp();
 
@@ -184,6 +185,67 @@ describe('POST /api/orders — client key-generation policy', () => {
   });
 });
 
+describe('POST /api/orders — country and delivery must agree', () => {
+  it('rejects a domestic courier for an address outside Pakistan', async () => {
+    // The hole this closes: a UK address on free "Nationwide courier".
+    const res = await request(app).post('/api/orders').send(validOrder({
+      address: { country: 'United Kingdom' },
+      root: { deliveryId: 'standard' },
+    }));
+    expect(res.status).toBe(422);
+    expect(res.body.details.deliveryId?.[0]).toMatch(/International Shipping/i);
+  });
+
+  it('accepts international shipping for an address outside Pakistan', async () => {
+    const res = await request(app).post('/api/orders').send(validOrder({
+      address: { country: 'United Kingdom' },
+      root: { deliveryId: 'international' },
+    }));
+    expect(res.status).toBe(201);
+    expect(res.body.pricing.deliveryPrice).toBe(3500);
+  });
+
+  it('rejects international shipping for a Pakistan address', async () => {
+    const res = await request(app).post('/api/orders').send(validOrder({
+      root: { deliveryId: 'international' },
+    }));
+    expect(res.status).toBe(422);
+  });
+
+  it.each(['standard', 'express', 'rush'])('accepts %s for a Pakistan address', async (deliveryId) => {
+    const res = await request(app).post('/api/orders').send(validOrder({ root: { deliveryId } }));
+    expect(res.status).toBe(201);
+  });
+
+  it('rejects a country that is not on the shipping list', async () => {
+    const res = await request(app).post('/api/orders').send(validOrder({
+      address: { country: 'Wakanda' },
+    }));
+    expect(res.status).toBe(422);
+  });
+
+  it('rejects an empty country — the dropdown always has a value now', async () => {
+    const res = await request(app).post('/api/orders').send(validOrder({
+      address: { country: '' },
+    }));
+    expect(res.status).toBe(422);
+  });
+});
+
+describe('the shipping-country list has not drifted between repos', () => {
+  const frontendList = path.resolve('../kit-frontend/src/data/countries.js');
+
+  it.skipIf(!existsSync(frontendList))('frontend and backend list identical countries', () => {
+    const source = readFileSync(frontendList, 'utf8');
+    const block = source.match(/export const SHIPPING_COUNTRIES = \[([\s\S]*?)\];/)[1];
+    const frontend = [...block.matchAll(/'([^']+)'/g)].map(m => m[1]);
+
+    // The lists are duplicated across two repos out of necessity; this is what keeps them honest.
+    // A country added to one side only would silently 422 every order using it.
+    expect(frontend).toEqual([...SHIPPING_COUNTRIES]);
+  });
+});
+
 describe('the frontend client does not mint its own key', () => {
   const servicePath = path.resolve('../kit-frontend/src/api/ordersService.js');
 
@@ -196,10 +258,13 @@ describe('the frontend client does not mint its own key', () => {
 });
 
 describe('POST /api/orders — optional contract fields arrive as empty strings', () => {
-  it('accepts empty clubName, province, postalCode, instructions and country', async () => {
+  // country is deliberately NOT in this list any more. It used to accept '' because the old
+  // free-text field had no required-validation; it is now a dropdown backed by a z.enum, so ''
+  // is neither producible nor accepted (docs/EXTRACTED.md discrepancy #2, resolved).
+  it('accepts empty clubName, province, postalCode and instructions', async () => {
     const res = await request(app).post('/api/orders').send(validOrder({
       contact: { clubName: '' },
-      address: { province: '', postalCode: '', country: '' },
+      address: { province: '', postalCode: '' },
       root: { instructions: '' },
     }));
     expect(res.status).toBe(201);

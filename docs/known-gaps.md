@@ -35,16 +35,21 @@ unreachable there, but the branch should not survive into a release build regard
 
 ---
 
-## 🟠 `team-socks` uses a placeholder image showing boxing gloves
+## 🟡 The catalog API can only serve one image per kit
 
-`public/static/kits/team-socks.png` (and its frontend twin `src/assets/team-socks.png`) is the
-**old `boxing-kit.png` renamed** — the picture is a pair of boxing gloves, not socks. The product
-row, slug, name, description, `kitType: 'socks'` and the SVG silhouette are all correct; only the
-catalog thumbnail is wrong.
+`kits.image_url` is the only image column, and all three projections (`toKit`, `toProduct`,
+`toFeaturedKit`) return a single `image`. Garments that have a back view — `cricket-trousers`,
+`football-shorts`, `team-socks` and others — carry `imageBack` **only** in `SPORT_KIT_GROUPS` in
+the frontend's `Customize.jsx`, which is a hardcoded constant and never fetched from the API.
 
-Replace both copies with the real artwork (same filename, so no code or seed change is needed),
-then re-run `npm run seed` only if `image_url` changes. `npm run sync:reference` keeps the
-`docs/frontend-reference/` mirrors in step.
+So the customizer can show a back view while the catalog cannot. Fine today, because only the
+customizer needs it. Serving it from the API would need a nullable `image_back_url` column
+(migration 007), the column added to `CATALOG_COLUMNS`, and the mappers updated — which changes
+the documented `/kits` response shape, so it needs a frontend-contract decision first.
+
+*(Resolved 2026-08-05: `team-socks` previously used the old `boxing-kit.png` renamed, so the
+thumbnail was a pair of boxing gloves. Real artwork is now in place — a single `socks.png`, with
+no back view.)*
 
 ---
 

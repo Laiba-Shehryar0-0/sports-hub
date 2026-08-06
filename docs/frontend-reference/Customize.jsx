@@ -62,7 +62,7 @@ import tracksuitBackImg from '../assets/tracksuit-back.png';
 import warmupSuitImg from '../assets/warmup-suit-front.png';
 import trainingBibImg from '../assets/training-bib-front.png';
 import trainingBibBackImg from '../assets/training-bib-back.png';
-import teamSocksImg from '../assets/team-socks.png';
+import teamSocksImg from '../assets/socks.png';
 import hockeyKitImg from '../assets/hockey-kit-front.png';
 import cyclingKitImg from '../assets/cycling-kit-front.png';
 import cyclingKitBackImg from '../assets/cycling-kit-back.png';

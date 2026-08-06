@@ -32,6 +32,53 @@ const SOURCES = [
   'src/data/galleryProductsSeed.js',
 ];
 
+/**
+ * Files the BACKEND owns and generates INTO the frontend — the opposite direction to SOURCES.
+ *
+ * The shipping-country list has to exist on both sides (the API validates against it, the
+ * checkout form renders it), and two hand-maintained copies drift — exactly how the sport enum
+ * ended up with three values on one side and five on the other. So the backend module is the
+ * single source and the frontend file is generated output: editing it by hand is overwritten,
+ * and `--check` fails when it is stale.
+ */
+const GENERATED = [
+  {
+    label: 'countries.js',
+    dest: path.join(frontendRoot, 'src', 'data', 'countries.js'),
+    build: async () => {
+      const c = await import('../src/modules/orders/orders.constants.js');
+      const list = c.SHIPPING_COUNTRIES.map(x => `  '${x}',`).join('\n');
+      return `// GENERATED FILE — DO NOT EDIT.
+// Source of truth: kit-backend/src/modules/orders/orders.constants.js
+// Regenerate with:  npm run sync:reference   (from kit-backend)
+//
+// The API validates address.country against this exact list, so a hand-edit here would 422 every
+// order using the added country. \`npm run sync:reference -- --check\` fails if this file is stale.
+
+export const DOMESTIC_COUNTRY = '${c.DOMESTIC_COUNTRY}';
+
+export const SHIPPING_COUNTRIES = [
+${list}
+];
+
+export const DOMESTIC_DELIVERY_IDS = ${JSON.stringify(c.DOMESTIC_DELIVERY_IDS)};
+export const INTERNATIONAL_DELIVERY_ID = '${c.INTERNATIONAL_DELIVERY_ID}';
+
+/** standard/express/rush are domestic couriers; anything abroad has to go DHL/FedEx. */
+export function allowedDeliveryIds(country) {
+  return country === DOMESTIC_COUNTRY
+    ? [...DOMESTIC_DELIVERY_IDS]
+    : [INTERNATIONAL_DELIVERY_ID];
+}
+
+export function isDeliveryAllowedForCountry(country, deliveryId) {
+  return allowedDeliveryIds(country).includes(deliveryId);
+}
+`;
+    },
+  },
+];
+
 const checkOnly = process.argv.includes('--check');
 const today = new Date().toISOString().slice(0, 10);
 
@@ -84,6 +131,28 @@ for (const src of SOURCES) {
 
   writeFileSync(destPath, header(src, today) + live, 'utf8');
   console.log(`synced     ${path.basename(src)}  <- ${src}`);
+}
+
+// ── 3. Generated files (backend -> frontend) ─────────────────────────────────
+if (GENERATED.length) {
+  console.log('\ngenerated into ../kit-frontend (backend is the source of truth)');
+  for (const item of GENERATED) {
+    const expected = await item.build();
+    const actual = existsSync(item.dest) ? readFileSync(item.dest, 'utf8') : null;
+    const inSync = actual === expected;
+
+    if (checkOnly) {
+      if (!inSync) drifted++;
+      console.log(`${inSync ? 'ok     ' : 'DRIFTED'}  ${item.label}`);
+      continue;
+    }
+    if (inSync) {
+      console.log(`unchanged  ${item.label}`);
+      continue;
+    }
+    writeFileSync(item.dest, expected, 'utf8');
+    console.log(`generated  ${item.label}  -> ${path.relative(repoRoot, item.dest)}`);
+  }
 }
 
 if (missing > 0) {
