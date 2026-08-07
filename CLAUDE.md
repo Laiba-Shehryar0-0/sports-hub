@@ -107,8 +107,12 @@ Never `res.status(500)` inside a controller.
 ## Not in scope — do not build
 
 `/designs` save/load (no frontend calls it yet), admin CRUD UI, payment gateway
-integration, product stock or inventory, cart, shipping-carrier APIs, server-side image
+integration, product stock or inventory, shipping-carrier APIs, server-side image
 export. `paymentId: 'cod'` is a complete implementation.
+
+**`cart` was removed from this list on 2026-08-07** — a multi-item cart is now in scope and being
+built. Orders move from one-design-per-order to a header/lines model (`orders` + `order_items`),
+so treat any remaining single-design assumption in these rules as legacy.
 
 ## Config
 
