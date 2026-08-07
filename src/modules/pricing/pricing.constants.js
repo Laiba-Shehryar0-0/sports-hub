@@ -39,5 +39,13 @@ export const SPORT_LABELS = Object.freeze({
 
 // Order quantity bounds. 5 is the minimum the checkout UI states and enforces; the server
 // enforces it too so the floor is real rather than a client-side nicety.
+//
+// With a multi-item cart these apply to the SUMMED quantity across all lines, not per line, so a
+// 3-jersey + 2-shorts order is valid. Each individual line still needs quantity >= 1.
 export const MIN_TOTAL_KITS = 5;
 export const MAX_TOTAL_KITS = 500;
+
+// Upper bound on cart lines. Bounds payload size and per-item work; the 500-kit total above
+// binds first in any realistic cart. Also caps the distinct kit types that can reach an
+// `IN (?)` query, since there cannot be more distinct types than there are lines.
+export const MAX_CART_ITEMS = 20;
