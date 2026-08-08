@@ -1,4 +1,4 @@
-// Snapshot of ../kit-frontend as of 2026-08-05 — reference only, do not edit here.
+// Snapshot of ../kit-frontend as of 2026-08-08 — reference only, do not edit here.
 // Source: src/pages/Customize.jsx
 
 import { useState, useRef, useCallback, useEffect } from 'react';
@@ -13,6 +13,13 @@ import {
   loadEditedKitImage, clearEditedKitImage,
 } from '../customize/kitShapes';
 import {
+  STORAGE_MESSAGE, writeStorage, readSavedDesigns, capSavedDesigns,
+} from '../customize/designStorage';
+import {
+  uploadLogoSequenced, createUploadSequencer, readFileAsDataUrl, ACCEPTED_LOGO_TYPES,
+} from '../customize/logoUpload';
+import { uploadLogoAsset } from '../api/assetsService';
+import {
   IconSelect, IconDraw, IconText, IconUndo, IconRedo, IconSave, IconExport,
   IconLayers, IconEye, IconEyeOff, IconGrip, IconUpload, IconPlus, IconMinus, IconPan,
   IconKit, IconPalette, IconTag, IconChevronLeft,
@@ -23,6 +30,7 @@ import {
   iconBtnCls, exportBtnCls, sideToggleCls, sideBtnCls, bodyCls, railCls,
   canvasCls, canvasCardCls, previewWrapCls, previewKitCls, previewKitImgCls,
   zoomCls, zoomBtnCls, zoomSpanCls, infoBarCls, colorSwatchCls, toastCls,
+  toastErrorCls, toastDismissCls,
   sidebarCls, tabsCls, tabCls, panelCls, panelBoxCls, sectionCls, labelCls,
   kitGridCls, kitBtnCls, kitThumbCls, sportGridCls, sportBtnCls, sportBackCls,
   pillRowCls, pillCls, sizeGridCls, sizeBtnCls, templateGridCls, templateBtnCls,
@@ -166,10 +174,32 @@ export default function Customize() {
   const [railHidden, setRailHidden] = useState(false);
   const [zoom, setZoom] = useState(100);
   const [panOffset, setPanOffset] = useState({ x: 0, y: 0 });
-  const [toast, setToast] = useState('');
+  // { text, kind: 'info' | 'error' } or null. The kind decides whether it auto-dismisses — an
+  // error the user has to act on must not disappear on its own.
+  const [toast, setToast] = useState(null);
   const [dragLayerId, setDragLayerId] = useState(null);
   const previewRef = useRef(null);
   const fileInputRef = useRef(null);
+  // Initialised to null (= "last write succeeded") so the first successful autosave on mount is a
+  // no-change and does not fire the recovery toast at the user for nothing.
+  const lastAutosaveError = useRef(null);
+
+  /**
+   * The local preview, held OUTSIDE `design` on purpose — this is the whole point of the phase.
+   *
+   * `design` is (a) serialised into localStorage by the autosave effect on every change and (b)
+   * tracked by useHistoryState for undo/redo. A blob: URL in there would be persisted as garbage
+   * and could be restored by undo *after* it had been revoked, rendering a broken image. Keeping
+   * it in separate state makes both impossible by construction rather than by remembering to
+   * filter it out.
+   *
+   * It is a blob: URL (~40 chars), never base64 — the data URL exists only as a local const inside
+   * the upload call.
+   */
+  const [logoPreview, setLogoPreview] = useState(null);
+  const [logoUploading, setLogoUploading] = useState(false);
+  const uploadSeq = useRef(null);
+  if (!uploadSeq.current) uploadSeq.current = createUploadSequencer();
   const panState = useRef({ dragging: false, startX: 0, startY: 0, originX: 0, originY: 0 });
   const navigate = useNavigate();
   const { user, openSignIn } = useAuth();
@@ -202,15 +232,40 @@ export default function Customize() {
     setZoom(100);
   }, []);
 
+  const showInfo = useCallback((text) => setToast({ text, kind: 'info' }), []);
+  const showError = useCallback((text) => setToast({ text, kind: 'error' }), []);
+  const dismissToast = useCallback(() => setToast(null), []);
+
+  /**
+   * Success toasts still auto-dismiss after 2200ms. Error toasts deliberately do NOT.
+   *
+   * "Design saved" is worth two seconds. "We can't start checkout until it saves" is not: it
+   * explains why a button the user just pressed appeared to do nothing, and if it vanishes before
+   * they finish reading, they are left with what looks like a broken button — which throws away
+   * most of the value of blocking the navigation in the first place. Errors carry an explicit
+   * dismiss instead.
+   */
   useEffect(() => {
-    if (!toast) return;
-    const t = setTimeout(() => setToast(''), 2200);
+    if (!toast || toast.kind === 'error') return;
+    const t = setTimeout(() => setToast(null), 2200);
     return () => clearTimeout(t);
   }, [toast]);
 
+  /**
+   * Autosave. This runs on EVERY design change — every colour drag, every nudge — so it cannot
+   * toast on each failure or the fix becomes its own bug, firing continuously while the user drags
+   * a slider. lastAutosaveError holds the previous outcome so the message appears once when
+   * saving starts failing, and once more (as a recovery) when it starts working again.
+   */
   useEffect(() => {
-    try { localStorage.setItem(DESIGN_STORAGE_KEY, JSON.stringify(design)); } catch { /* storage unavailable */ }
-  }, [design]);
+    const failure = writeStorage(DESIGN_STORAGE_KEY, JSON.stringify(design));
+
+    if (failure !== lastAutosaveError.current) {
+      lastAutosaveError.current = failure;
+      if (failure) showError(`${STORAGE_MESSAGE[failure]} Your work is not being saved.`);
+      else showInfo('Saving again — your design is safe.');
+    }
+  }, [design, showError, showInfo]);
 
   // Shows the flattened, drawn-on kit from the Kit Editor (if this side has one) in place of the
   // live SVG preview — so coming "Back" from editing actually shows what was drawn.
@@ -272,13 +327,20 @@ export default function Customize() {
   }, [setDesign, invalidateEditedKit]);
 
   const handleSave = useCallback(() => {
-    try {
-      const saved = JSON.parse(localStorage.getItem(SAVED_DESIGNS_KEY) || '[]');
-      saved.push({ ...design, id: Date.now(), kitTypeLabel: design.kitProduct || KIT_TYPES.find(k => k.id === design.kitType)?.label });
-      localStorage.setItem(SAVED_DESIGNS_KEY, JSON.stringify(saved));
-    } catch { /* storage unavailable — ignore */ }
-    setToast('Design saved');
-  }, [design]);
+    const saved = readSavedDesigns();
+    saved.push({ ...design, id: Date.now(), kitTypeLabel: design.kitProduct || KIT_TYPES.find(k => k.id === design.kitType)?.label });
+
+    const failure = writeStorage(SAVED_DESIGNS_KEY, JSON.stringify(capSavedDesigns(saved)));
+
+    // INSIDE the outcome check, not unconditionally after it. This previously said "Design saved"
+    // even when the write had thrown — not a silent failure but an active false confirmation,
+    // which is worse: the user has been told their work is safe when it is gone.
+    //
+    // The wording deliberately does not promise the design can be reopened. It cannot: nothing
+    // reads these entries back (see the known-gaps entry).
+    if (failure) showError(STORAGE_MESSAGE[failure]);
+    else showInfo('Design saved to this browser');
+  }, [design, showError, showInfo]);
 
   const handleExport = useCallback(() => {
     const svgEl = previewRef.current?.querySelector('svg');
@@ -291,17 +353,73 @@ export default function Customize() {
     a.download = `kit-design-${Date.now()}.svg`;
     a.click();
     URL.revokeObjectURL(url);
-    setToast('Exported SVG');
+    showInfo('Exported SVG');
   }, []);
 
-  const handleLogoFile = useCallback((file) => {
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => patch({ logoDataUrl: reader.result, logoPreset: null });
-    reader.readAsDataURL(file);
-  }, [patch]);
+  /**
+   * REVOCATION LIVES HERE, not in the upload callback.
+   *
+   * React runs the previous cleanup before re-running the effect AND on unmount, so this one
+   * mechanism covers all three cases — replaced, resolved, unmounted. Two properties matter:
+   *
+   *  - Each render's cleanup closes over ITS OWN logoPreview, so it can never revoke a URL
+   *    belonging to a different upload. Revoking manually inside the async handler is exactly the
+   *    stale-closure leak this avoids: that closure captures the value from when it started, which
+   *    may no longer be the one on screen.
+   *  - Cleanup runs AFTER React commits the next render, so the <img> is already pointing at the
+   *    new src before the old URL dies. A URL that is still rendering is never revoked.
+   */
+  useEffect(() => {
+    if (!logoPreview) return undefined;
+    return () => URL.revokeObjectURL(logoPreview);
+  }, [logoPreview]);
 
+  // Declared before handleLogoFile, which lists it as a dependency — the other order is a
+  // temporal-dead-zone reference error at render.
   const openFilePicker = useCallback(() => fileInputRef.current?.click(), []);
+
+  const handleLogoFile = useCallback(async (file) => {
+    if (!file) return;
+
+    // Shown immediately, so the picture appears as instantly as it did before this phase. Only
+    // the confirmation waits on the network.
+    setLogoPreview(URL.createObjectURL(file));
+    setLogoUploading(true);
+
+    const result = await uploadLogoSequenced({
+      sequencer: uploadSeq.current,
+      file,
+      readAsDataUrl: readFileAsDataUrl,
+      post: uploadLogoAsset,
+    });
+
+    // Superseded by a newer pick. Touch NOTHING — the newer call owns the preview, the spinner and
+    // any message, and its blob URL is already on screen. This upload's URL was revoked by the
+    // effect above when setLogoPreview replaced it.
+    if (result.stale) return;
+
+    setLogoUploading(false);
+
+    if (!result.ok) {
+      setLogoPreview(null);   // triggers revoke; design keeps whatever logo it already had
+
+      if (result.kind === 'unauthorized') {
+        // The token expired between the gate and the response. Reopen the picker after sign-in
+        // rather than retrying with this File: the modal can sit open for minutes, and re-picking
+        // is cheaper than reasoning about whether the handle is still readable.
+        openSignIn({ id: 'customize:upload', label: 'upload a logo', run: openFilePicker });
+      } else {
+        showError(result.message);
+      }
+      return;
+    }
+
+    // Success. On the offline path result.url IS the data URL — deliberately, so the logo is sent
+    // inline with the order — and that is the only route by which base64 reaches `design`.
+    patch({ logoDataUrl: result.url, logoPreset: null });
+    setLogoPreview(null);
+    if (result.offline) showError(result.message);
+  }, [patch, openSignIn, openFilePicker, showError]);
 
   /**
    * Wraps an action so a logged-out user gets the auth modal instead of a silent no-op. The
@@ -316,10 +434,27 @@ export default function Customize() {
   const guardedExport = gated('customize:export', 'export your design', handleExport);
   const guardedUpload = gated('customize:upload', 'upload a logo', openFilePicker);
 
+  /**
+   * THE WRITE IS A PRECONDITION OF NAVIGATING, not a side effect of it.
+   *
+   * Checkout has no route state — it rebuilds the design by calling loadStoredDesign(), which
+   * reads this exact key. So if this write fails and we navigate anyway, checkout silently loads
+   * whatever was stored BEFORE (or DEFAULT_DESIGN if nothing was), and the customer orders and
+   * pays for a kit they did not design. Nothing anywhere would show that it had happened.
+   *
+   * Blocking here is the least-bad outcome: the user keeps their design on screen and gets a
+   * message they can act on, instead of a wrong kit arriving weeks later.
+   */
   const handlePlaceOrder = useCallback(() => {
-    try { localStorage.setItem(DESIGN_STORAGE_KEY, JSON.stringify(design)); } catch { /* storage unavailable */ }
+    const failure = writeStorage(DESIGN_STORAGE_KEY, JSON.stringify(design));
+
+    if (failure) {
+      showError(`${STORAGE_MESSAGE[failure]} We can't start checkout until it saves.`);
+      return;
+    }
+
     navigate('/checkout');
-  }, [design, navigate]);
+  }, [design, navigate, showError]);
 
   const kitLabel = design.kitProduct || KIT_TYPES.find(k => k.id === design.kitType)?.label || 'Jersey';
 
@@ -398,7 +533,9 @@ export default function Customize() {
                     numberSize={design.numberSize}
                     textPosition={design.textPosition}
                     numberPosition={design.numberPosition}
-                    logoDataUrl={design.logoDataUrl}
+                    /* Preview wins while an upload is in flight, so the kit shows the new logo
+                       immediately instead of the previous one until the round trip finishes. */
+                    logoDataUrl={logoPreview ?? design.logoDataUrl}
                     logoPreset={design.logoPreset}
                     logoScale={design.logoScale}
                     logoOpacity={design.logoOpacity}
@@ -464,6 +601,7 @@ export default function Customize() {
             {activeTab === 'assets' && (
               <AssetsPanel
                 design={design} patch={patch}
+                logoPreview={logoPreview} uploading={logoUploading}
                 fileInputRef={fileInputRef}
                 onUploadClick={guardedUpload}
                 onFile={handleLogoFile}
@@ -483,7 +621,16 @@ export default function Customize() {
         </aside>
       </div>
 
-      {toast && <div className={toastCls}>{toast}</div>}
+      {toast && (
+        <div className={toast.kind === 'error' ? toastErrorCls : toastCls} role={toast.kind === 'error' ? 'alert' : 'status'}>
+          <span>{toast.text}</span>
+          {/* Errors do not auto-dismiss, so they need a way out. Success toasts time out on
+              their own and adding a button to those would be noise. */}
+          {toast.kind === 'error' && (
+            <button type="button" onClick={dismissToast} className={toastDismissCls} aria-label="Dismiss">×</button>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -898,8 +1045,11 @@ function DrawPanel({ side }) {
 }
 
 /* ── Assets Panel ───────────────────────────────────────────── */
-function AssetsPanel({ design, patch, fileInputRef, onFile, onUploadClick }) {
+function AssetsPanel({ design, patch, logoPreview, uploading, fileInputRef, onFile, onUploadClick }) {
   const [dragOver, setDragOver] = useState(false);
+
+  // The in-flight preview takes precedence over the stored logo, so the panel and the kit agree.
+  const shownLogo = logoPreview ?? design.logoDataUrl;
 
   return (
     <div className={panelBoxCls}>
@@ -907,26 +1057,33 @@ function AssetsPanel({ design, patch, fileInputRef, onFile, onUploadClick }) {
         <h3 className={labelCls}>Upload Logo / Badge</h3>
         <div
           className={dropzoneCls(dragOver)}
-          onClick={onUploadClick}
-          onDragOver={e => { e.preventDefault(); setDragOver(true); }}
+          onClick={uploading ? undefined : onUploadClick}
+          onDragOver={e => { e.preventDefault(); if (!uploading) setDragOver(true); }}
           onDragLeave={() => setDragOver(false)}
-          onDrop={e => { e.preventDefault(); setDragOver(false); onFile(e.dataTransfer.files?.[0]); }}
+          onDrop={e => { e.preventDefault(); setDragOver(false); if (!uploading) onFile(e.dataTransfer.files?.[0]); }}
         >
-          {design.logoDataUrl ? (
-            <img src={design.logoDataUrl} alt="Uploaded logo" className={dropzonePreviewCls} />
+          {shownLogo ? (
+            <img src={shownLogo} alt="Uploaded logo" className={dropzonePreviewCls} />
           ) : (
             <>
               <IconUpload />
               <p className="text-[12px] font-semibold">Click to upload or drag &amp; drop</p>
-              <span className="text-[10px] text-onsurface-600">PNG, SVG, JPG · Max 5MB</span>
+              {/* SVG is deliberately absent: the server rejects it because SVG is XML and can
+                  carry scripts, so offering it only invites a choice that cannot succeed. */}
+              <span className="text-[10px] text-onsurface-600">PNG, JPG, WebP · Max 5MB</span>
             </>
           )}
+          {uploading && (
+            <span className="absolute inset-0 grid place-items-center bg-black/55 text-white text-[11px] font-bold rounded-[inherit]">
+              Uploading…
+            </span>
+          )}
           <input
-            ref={fileInputRef} type="file" accept=".png,.svg,.jpg,.jpeg" hidden
+            ref={fileInputRef} type="file" accept={ACCEPTED_LOGO_TYPES} hidden disabled={uploading}
             onChange={e => onFile(e.target.files?.[0])}
           />
         </div>
-        {design.logoDataUrl && (
+        {design.logoDataUrl && !uploading && (
           <button className={linkBtnCls} onClick={() => patch({ logoDataUrl: null })}>Remove logo</button>
         )}
       </div>
