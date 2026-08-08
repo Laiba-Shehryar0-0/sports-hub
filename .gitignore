@@ -5,3 +5,12 @@ npm-debug.log*
 dist/
 coverage/
 *.log
+
+# Runtime logo uploads, not source. The real fix is env.LOGO_DIR plus the test-mode guard in
+# assets.service; this is belt-and-braces so a stray `git add .` cannot commit user uploads the
+# way 12 test-generated files were committed before (removed in cf11727).
+#
+# Deliberately NOT retroactive: 088f2e63-8f49-4a03-8af6-fd46fcbe6f13.webp is already tracked and
+# stays tracked — gitignore does not untrack files, and untracking it would leave a fresh clone
+# unable to render the logo on KW-2026-000002, the only real order.
+public/static/logos/

@@ -1,9 +1,11 @@
 import { randomUUID } from 'node:crypto';
+import { mkdirSync, realpathSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import sharp from 'sharp';
 import { fileTypeFromBuffer } from 'file-type';
+import { env } from '../../config/env.js';
 import { AppError } from '../../utils/AppError.js';
 import { logger } from '../../utils/logger.js';
 
@@ -14,9 +16,64 @@ import { logger } from '../../utils/logger.js';
  * auditable place, so anything that accepts an image gets the same treatment.
  */
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const LOGO_DIR = path.join(__dirname, '..', '..', '..', 'public', 'static', 'logos');
+// From config, not from this file's __dirname. app.js derives the serve path from the same
+// config, so the two can no longer drift apart.
+const LOGO_DIR = env.LOGO_DIR;
 const PUBLIC_PREFIX = '/static/logos';
+
+/**
+ * TEST-MODE WRITE GUARD — throws at import, before a single file can be written.
+ *
+ * Deliberately stronger than the database guard. That one lives in the test files themselves
+ * (`expect(env.DB_NAME).toBe('kitworld_test')`), so it only protects suites that remember to
+ * assert it. This sits in the code path, so it protects every caller — tests, scripts, ad-hoc
+ * probes — including ones written later by someone who never reads this comment.
+ *
+ * It checks CONTAINMENT IN AN OS TEMP DIRECTORY, not "differs from the production path". A
+ * difference check passes for any other real directory a typo could produce; only containment
+ * establishes that the target is actually scratch space.
+ */
+function assertTempDirUnderTest(dir) {
+  // Both forms of the temp root: on Windows os.tmpdir() can differ from its realpath (8.3 name or
+  // a junction). dir itself cannot be realpath'd — it may not exist yet.
+  const roots = [...new Set([os.tmpdir(), realpathSync(os.tmpdir())])].map((p) => path.resolve(p));
+  const target = path.resolve(dir);
+
+  const inside = roots.some((root) => {
+    const relative = path.relative(root, target);
+    // relative === '' rejects the temp root itself: a subdirectory is required, so the mkdir below
+    // and any future cleanup have a bounded scope rather than the whole of /tmp.
+    return relative !== '' && !relative.startsWith('..') && !path.isAbsolute(relative);
+  });
+
+  if (!inside) {
+    throw new Error(
+      `NODE_ENV=test but LOGO_DIR (${target}) is not inside the OS temp directory `
+      + `(${os.tmpdir()}). Refusing to write uploads to real storage.`,
+    );
+  }
+}
+
+/**
+ * Both checks below run AT IMPORT, and deliberately so. Do not make them lazy.
+ *
+ * This module is imported by orders.service, so a bad LOGO_DIR now stops the process from
+ * starting rather than degrading. That is the right trade: an order that begins, collects a
+ * customer's name, address and phone, and only then fails on the logo write is strictly worse
+ * than a server that refuses to boot — the customer has handed over their details and lost their
+ * design, and the operator finds out from them rather than from the deploy. A process that will
+ * not start is noticed immediately, by the person who caused it.
+ *
+ * This is the contract env.js already has: invalid configuration exits at boot, it does not wait
+ * to fail on the first request that happens to touch it. Deferring either check to first write
+ * would quietly break that.
+ */
+if (env.isTest) assertTempDirUnderTest(LOGO_DIR);
+
+// Created here, not at first upload — an unwritable LOGO_DIR (EACCES, ENOTDIR, a missing parent
+// on a volume that never mounted) must surface at boot, not as a 500 for whichever user uploads
+// first, possibly days after the deploy that broke it.
+mkdirSync(LOGO_DIR, { recursive: true });
 
 // Raster formats only. SVG is deliberately absent: it is XML, it can carry <script> and external
 // entity references, and browsers execute it when served inline.
@@ -95,6 +152,8 @@ export async function storeFromDataUrl(dataUrl, { ownerUserId = null } = {}) {
 
   // UUID key. No part of any client-supplied filename ever reaches a path (rule 5).
   const filename = `${randomUUID()}.webp`;
+  // Redundant with the mkdirSync at import — kept as cheap insurance against the directory being
+  // removed while the process is running, which the import-time call cannot cover.
   await mkdir(LOGO_DIR, { recursive: true });
 
   // File first, then the caller writes the DB row. A row pointing at a missing file is worse

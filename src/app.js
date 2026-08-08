@@ -1,6 +1,4 @@
 import { randomUUID } from 'node:crypto';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import express from 'express';
 import helmet from 'helmet';
 import cors from 'cors';
@@ -17,8 +15,14 @@ import catalogRouter from './modules/catalog/catalog.routes.js';
 import authRouter from './modules/auth/auth.routes.js';
 import ordersRouter from './modules/orders/orders.routes.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const staticRoot = path.join(__dirname, '..', 'public', 'static');
+// One options object for both static mounts below, so the two cannot drift apart — a logo served
+// without nosniff while kit images have it would be an easy thing not to notice.
+const staticOptions = {
+  maxAge: '7d',
+  setHeaders(res) {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+  },
+};
 
 export function createApp() {
   const app = express();
@@ -61,15 +65,17 @@ export function createApp() {
   // own routers, on top of this.
   app.use(globalLimiter);
 
+  // Uploaded logos, mounted AHEAD of the general /static mount so the serve path always follows
+  // the write path wherever env.LOGO_DIR points. In development both resolve to the same
+  // directory; under test LOGO_DIR moves to an OS temp dir and this mount follows it, while the
+  // committed kit images below stay in the repo. Previously assets.service and this file each
+  // computed a path from their own __dirname and agreed only by coincidence of directory depth.
+  app.use('/static/logos', express.static(env.LOGO_DIR, staticOptions));
+
   // Serves the seeded kit images. image_url in the DB is root-relative
   // (/static/kits/<filename>), never an absolute URL with a host — a
   // baked-in localhost:4000 would break every row on deploy.
-  app.use('/static', express.static(staticRoot, {
-    maxAge: '7d',
-    setHeaders(res) {
-      res.setHeader('X-Content-Type-Options', 'nosniff');
-    },
-  }));
+  app.use('/static', express.static(env.STATIC_ROOT, staticOptions));
 
   // catalogRouter defines its own full paths (/kits, /kits/featured,
   // /products), so it mounts at /api, not /api/kits.
