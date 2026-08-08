@@ -78,6 +78,50 @@ DELETE FROM email_verifications WHERE token_expires_at < NOW() - INTERVAL 30 DAY
 
 ---
 
+## 🔴 "Design saved" saves nothing that can ever be restored
+
+Frontend, `kit-frontend`. The Save button in `Customize.jsx` appends the design to
+`kitlab_saved_designs` in `localStorage` — and **nothing ever reads that array's contents back**.
+The only reader is `hasPickedDesign()` in `src/customize/kitShapes.js`, which checks
+`length > 0` as a checkout gate. There is no saved-designs list, no restore, and no delete UI.
+
+So the button makes a promise the app cannot keep. A user who saves ten designs, closes the tab and
+returns has no way to reach any of them, and nothing tells them that.
+
+**Contained, not fixed (2026-08-08):** the toast now reads "Design saved to this browser" rather
+than "Design saved", so it no longer implies the design can be reopened, and the array is capped at
+20 entries (FIFO) so it cannot grow without bound against the ~5MB origin budget. Dropping the
+oldest is acceptable *only* because nothing can retrieve them; if a saved-designs list is ever
+built, that reasoning expires and the cap needs revisiting at the same time.
+
+**To fix properly:** either build the list/restore/delete UI the button implies, or remove the
+button. The middle state — a save that silently goes nowhere — is the worst of the three.
+
+---
+
+## 🟠 `kitlab_edited_kit` writes are still swallowed, and it is the biggest key
+
+Frontend, `kit-frontend/src/customize/kitShapes.js:219`. `storeEditedKitImage` ends in
+`catch { /* storage unavailable */ }`, so a failed write is silent — the same pattern fixed in
+`Customize.jsx` on 2026-08-08 for `kitlab_current_design` and `kitlab_saved_designs`.
+
+**Why it was left rather than tacked on.** This key holds **flattened PNG data URLs** from the Kit
+Editor, one per side. It is by some distance the largest consumer of the ~5MB origin budget — far
+bigger than a design's JSON — so it is the key most likely to hit the quota and the one most likely
+to push the *others* over. It also fails differently: losing it silently discards the user's
+drawing, and the customizer then falls back to the plain SVG preview, which looks like the drawing
+was never made rather than like an error.
+
+Fixing it properly means deciding what the fallback should be (re-render from the source drawing?
+prompt to re-export?), which is a different question from "surface the error", and the surrounding
+code has no toast to reuse the way `Customize.jsx` did.
+
+**When it is picked up**, `writeStorage`/`classifyStorageError` in
+`src/customize/designStorage.js` already exist and should be reused rather than reimplemented —
+they carry the quota-vs-blocked distinction, including the Safari private-mode case.
+
+---
+
 ## 🟠 Uploaded logos are never cleaned up — and "orphan" is not server-observable
 
 `POST /api/assets` writes into `env.LOGO_DIR` before any order exists, so files accumulate from
