@@ -218,8 +218,25 @@ a round-trip assertion belongs with `POST /api/assets`).
 
 ---
 
-## 🟡 `validate` returns a generic message
+## ✅ `validate` returned a generic message — FIXED 2026-08-09
 
-A 422 body says `message: "Validation failed."` while the useful per-field text sits in `details`.
-The frontend renders `message`, so users see the generic string unless a screen reads `details`
-explicitly. Fixing it means changing shared `src/middlewares/validate.js` for every module.
+*Kept as a record of how it was found, because the failure mode is instructive.*
+
+Every 422 from `validate` said `message: "Validation failed."` while the useful per-field text sat
+unread in `details`. The frontend renders `message`, so a mislabelled logo, a missing field and a
+smuggled unknown key all read identically to the user.
+
+**It was logged as 🟡 and it was not cosmetic.** It surfaced during Phase 2.5: uploading a `.txt`
+renamed to `.png` made the browser emit `data:text/plain;base64,…`, which fails the schema's prefix
+check *before* the magic-byte sniff runs. The response already contained
+`details.dataUrl: ["Logos must be a JPEG, PNG or WebP data URL."]` — the right sentence, never
+shown.
+
+**Why no test caught it:** every existing assertion checked the status code, and the status was
+always correct. `expect(res.status).toBe(422)` passes just as happily when the message is useless.
+The tests added with the fix assert the message a user actually reads.
+
+**Fix:** `buildMessage()` in `src/middlewares/validate.js` derives `message` from the first issue.
+Author-written messages (detected by a trailing full stop) are used verbatim; zod's terse defaults
+("Required") get the humanized field name prepended, since they mean nothing alone. `details` is
+unchanged and remains the machine-readable form.

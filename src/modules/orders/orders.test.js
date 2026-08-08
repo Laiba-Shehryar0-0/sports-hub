@@ -382,6 +382,12 @@ describe('POST /api/orders — validation', () => {
     expect(res.status).toBe(422);
     const body = JSON.stringify(res.body);
     expect(body).not.toMatch(/orders|design_json|mysql|SELECT|INSERT|at .*\.js:/i);
-    expect(res.body.message).toBe('Validation failed.');
+
+    // No longer the constant 'Validation failed.' — validate.js now surfaces the first issue so
+    // the frontend, which renders `message` verbatim, has something a user can act on. It must
+    // still say something, and still say nothing internal (asserted above).
+    expect(res.body.message).toBeTruthy();
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+    expect(res.body.details).toBeTruthy();
   });
 });

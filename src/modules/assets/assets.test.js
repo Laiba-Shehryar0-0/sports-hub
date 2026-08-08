@@ -248,6 +248,66 @@ describe('POST /api/assets', () => {
     expect(logoCount()).toBe(before); // nothing written
   });
 
+  /**
+   * THE MESSAGE, not just the status.
+   *
+   * A mislabelled file (a .txt renamed .png) makes the browser's FileReader emit
+   * `data:text/plain;base64,…`, which fails the schema's prefix check BEFORE the magic-byte sniff
+   * ever runs. The status was always 422 and the useful sentence was always in `details` — but
+   * `message`, which is the only thing the frontend shows, read "Validation failed."
+   *
+   * A status-only assertion passed throughout. This asserts what the user actually reads.
+   */
+  it('tells the user what is wrong with a mislabelled file, not "Validation failed"', async () => {
+    const notAnImage = Buffer.from('plain text, not an image').toString('base64');
+
+    const res = await request(app).post('/api/assets')
+      .set('Authorization', `Bearer ${auth.token}`)
+      .send({ dataUrl: `data:text/plain;base64,${notAnImage}` });
+
+    expect(res.status).toBe(422);
+    expect(res.body.message).toBe('Logos must be a JPEG, PNG or WebP data URL.');
+    expect(res.body.message).not.toBe('Validation failed.');
+    // The per-field breakdown is unchanged — message is derived from it, not instead of it.
+    expect(res.body.details.dataUrl).toContain('Logos must be a JPEG, PNG or WebP data URL.');
+  });
+
+  /**
+   * The other half: a file whose prefix is honest but whose BYTES are not. This one does reach the
+   * magic-byte sniff, and always had a good message. Kept alongside so the two layers stay
+   * distinguishable — they report different codes and must keep doing so.
+   */
+  it('distinguishes a bad prefix from bad bytes', async () => {
+    const textBytes = Buffer.from('plain text, not an image').toString('base64');
+
+    const badPrefix = await request(app).post('/api/assets')
+      .set('Authorization', `Bearer ${auth.token}`)
+      .send({ dataUrl: `data:text/plain;base64,${textBytes}` });
+
+    const badBytes = await request(app).post('/api/assets')
+      .set('Authorization', `Bearer ${auth.token}`)
+      .send({ dataUrl: `data:image/png;base64,${textBytes}` });
+
+    expect(badPrefix.body.code).toBe('VALIDATION_ERROR');     // schema layer
+    expect(badBytes.body.code).toBe('ASSET_UNSUPPORTED_TYPE'); // sniff layer
+    expect(badBytes.body.message).toBe('Logos must be a JPEG, PNG or WebP image.');
+    // Both are actionable sentences, neither is the generic string.
+    for (const res of [badPrefix, badBytes]) {
+      expect(res.body.message).toMatch(/JPEG, PNG or WebP/);
+    }
+  });
+
+  it('names the field for a zod default message, which has no context on its own', async () => {
+    const res = await request(app).post('/api/assets')
+      .set('Authorization', `Bearer ${auth.token}`)
+      .send({});
+
+    expect(res.status).toBe(422);
+    // 'Required' alone is meaningless to a user; the field name makes it a sentence.
+    expect(res.body.message).toBe('Data url: Required');
+    expect(res.body.details.dataUrl).toContain('Required');
+  });
+
   it('rejects unknown keys rather than ignoring them', async () => {
     const res = await request(app).post('/api/assets')
       .set('Authorization', `Bearer ${auth.token}`)
