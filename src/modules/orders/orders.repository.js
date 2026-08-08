@@ -24,15 +24,21 @@ export async function insertOrder(order, db = pool) {
      VALUES ('', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       order.userId,
-      JSON.stringify(order.design),
+      // Nullable since migration 007. `? :` rather than JSON.stringify(null), which yields the
+      // STRING "null" and would store a JSON null instead of a SQL NULL — the two are different
+      // and only the second is what `WHERE design_json IS NULL` finds.
+      order.design ? JSON.stringify(order.design) : null,
       JSON.stringify(order.contact),
       JSON.stringify(order.address),
       order.deliveryId,
       order.paymentId,
+      // NOT NULL, and meaningful for both shapes: the summed quantity across every line.
       order.totalKits,
-      order.primarySize,
+      // Nullable since 007: a multi-line cart has no single size or unit price. Populated only
+      // for a legacy body, so the existing order tests keep asserting what they assert today.
+      order.primarySize ?? null,
       order.instructions || null,
-      order.pricing.unitPrice,
+      order.pricing.unitPrice ?? null,
       order.pricing.kitPrice,
       order.pricing.deliveryPrice,
       order.pricing.discount,
@@ -41,6 +47,66 @@ export async function insertOrder(order, db = pool) {
     ],
   );
   return result.insertId;
+}
+
+/**
+ * Writes every line of an order in ONE statement.
+ *
+ * A loop of single-row inserts would be an `await` per row (CLAUDE.md rule 13) — 20 round trips
+ * inside a transaction, holding a pool connection for the duration of all of them.
+ *
+ * Called only from inside withTransaction, immediately after insertOrder, so the header and its
+ * lines commit together or not at all. An order with no lines is not a state this system should
+ * ever be able to observe.
+ */
+export async function insertOrderItems(orderId, items, db = pool) {
+  // `VALUES ()` is a syntax error. A validated cart cannot be empty, so this is a guard against a
+  // programming mistake rather than an expected input.
+  if (items.length === 0) return;
+
+  const rows = items.map((item) => [
+    orderId,
+    item.position,
+    JSON.stringify(item.design),   // object -> "[object Object]" without this
+    item.kitType,
+    item.kitProduct ?? null,
+    item.size,
+    item.quantity,
+    item.unitPrice,
+    item.lineTotal,
+  ]);
+
+  // query(), not execute(): mysql2 expands a nested array into a multi-row VALUES list only for
+  // query(). execute() prepares the statement, where `?` is a single scalar placeholder and the
+  // array would bind as one value — the same distinction as `IN (?)` in pricing.repository.
+  // Still a placeholder: no value is ever interpolated into the SQL string.
+  await db.query(
+    `INSERT INTO order_items
+       (order_id, position, design_json, kit_type, kit_product, size, quantity, unit_price, line_total)
+     VALUES ?`,
+    [rows],
+  );
+}
+
+/**
+ * The lines of one order, for the idempotent-replay response.
+ *
+ * Index: uq_order_items_position (order_id, position) — order_id is the leading column and
+ * position the second, so this one index serves both the filter and the ordering. No filesort.
+ *
+ * design_json is selected because the replay rebuilds the per-line template and sport labels from
+ * it. This is a single-order read, not a list endpoint, so carrying the JSON is proportionate —
+ * unlike on orders, where design_json must never travel to a list.
+ */
+export async function findItemsByOrderId(orderId, db = pool) {
+  const [rows] = await db.execute(
+    `SELECT position, design_json, kit_type, kit_product, size, quantity, unit_price, line_total
+     FROM order_items
+     WHERE order_id = ?
+     ORDER BY position`,
+    [orderId],
+  );
+  return rows;
 }
 
 /** KW-2026-000044 — year of creation plus a zero-padded id, stable and human-quotable. */

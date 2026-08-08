@@ -32,6 +32,22 @@ function assertWholePkr(label, value) {
   return value;
 }
 
+/**
+ * ┌─ NOT CALLED IN PRODUCTION AS OF THIS COMMIT ─────────────────────────────────────────────────┐
+ * │ orders.service now prices BOTH payload shapes through computeCartPricing(): the legacy       │
+ * │ single-design body is normalised by orders.schema into a one-item cart, so there is one       │
+ * │ pricing path rather than two that can drift.                                                 │
+ * │                                                                                              │
+ * │ The ONLY remaining caller is pricing.test.js — its 23 tests, plus the 72-case characterization│
+ * │ matrix asserting that a one-item cart agrees with this function on every figure. That matrix  │
+ * │ is what made the switch safe, and it is the reason this function is still here.               │
+ * │                                                                                              │
+ * │ SCHEDULED FOR REMOVAL IN PHASE 5, with the legacy payload branch it used to serve. Until      │
+ * │ then: DO NOT FIX A PRICING BUG HERE. A change made here changes nothing a customer is         │
+ * │ charged — computeCartPricing below is what runs. Fix it there, and if the two must agree,     │
+ * │ the characterization test will tell you.                                                     │
+ * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+ */
 export async function computePricing({ kitType, template, sport, totalKits, deliveryId }) {
   // Bounds are enforced here as well as at the route's zod schema: this function is the last
   // thing between an order and a persisted money column, and it is callable directly.

@@ -122,6 +122,32 @@ they carry the quota-vs-blocked distinction, including the Safari private-mode c
 
 ---
 
+## 🟡 An idempotent replay of a cart order returns a slightly different shape
+
+`POST /orders` returns `pricing` built by `computeCartPricing`, whose per-line objects include
+`kitLabel` and whose top level includes `deliveryName`. **A replay of that same request — the
+double-click path, matched on `Idempotency-Key` — omits both.**
+
+They are presentation strings derived from `kit_prices` and `delivery_methods` and are not
+persisted on `order_items`. Every other figure in the replay comes from the stored columns, which
+is deliberate: a replay must state what was actually **charged**, never a recompute, because a
+price can change between the original order and the retry.
+
+**Re-deriving the labels was considered and rejected.** Looking them up at replay time would report
+labels from tables whose contents may have moved since the order was placed — a line that says
+"Polo" today and something else tomorrow for the same order. Absent is better than wrong.
+
+**Why this is logged rather than fixed:** the fix is to persist the labels on `order_items`, and
+that is a schema change for a presentation string. It belongs with **order history in Phase 5**,
+when the renderer's actual needs are known — building `GET /orders/:reference` will settle whether
+these labels are wanted per line at all, or whether `kit_product` (already stored as a snapshot for
+exactly this reason) is the right thing to show.
+
+**Whoever builds order history should read this first.** The replay path in
+`orders.service.toOrderResponse` is where the difference lives.
+
+---
+
 ## 🟠 Uploaded logos are never cleaned up — and "orphan" is not server-observable
 
 `POST /api/assets` writes into `env.LOGO_DIR` before any order exists, so files accumulate from

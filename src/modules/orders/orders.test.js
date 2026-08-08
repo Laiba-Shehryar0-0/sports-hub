@@ -48,9 +48,265 @@ beforeAll(() => {
   expect(env.DB_NAME).toBe('kitworld_test'); // never touch kitworld
 });
 
+/**
+ * Lines first, then headers. fk_order_items_order is ON DELETE RESTRICT, so deleting an order that
+ * still has lines fails loudly — which is the point: an unscoped `DELETE FROM orders` must error
+ * rather than silently take every line with it (CLAUDE.md rule 16).
+ *
+ * Scoping: order_items has no email of its own, so it is reached through a JOIN on its parent
+ * order. Every row this can touch therefore has a parent matching the test-only pattern; there is
+ * no path by which it reaches a line this suite did not create.
+ *
+ * ┌─ THE DATABASE CHECK IS REPEATED HERE ON PURPOSE ──────────────────────────────────────────────┐
+ * │ The beforeAll guard does NOT protect these deletes: vitest runs afterAll hooks even when      │
+ * │ beforeAll has thrown (verified, not assumed). A misconfigured NODE_ENV or DB_NAME_TEST would  │
+ * │ therefore fail the assertion above and still run these two statements — correctly scoped, on  │
+ * │ the wrong database, removing every real order whose contact email ends in @example.com.       │
+ * │                                                                                               │
+ * │ Cleanup that deletes must verify its own preconditions. Do not remove this on the grounds     │
+ * │ that beforeAll already checks.                                                                │
+ * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+ */
 afterAll(async () => {
+  if (env.DB_NAME !== 'kitworld_test') {
+    throw new Error(`Refusing to delete: DB_NAME is "${env.DB_NAME}", not kitworld_test.`);
+  }
+
+  await pool.execute(
+    `DELETE oi FROM order_items oi
+       JOIN orders o ON o.id = oi.order_id
+     WHERE o.contact_json->>'$.email' LIKE '%@example.com'`,
+  );
   await pool.execute("DELETE FROM orders WHERE contact_json->>'$.email' LIKE '%@example.com'");
   await closePool();
+});
+
+/** The same payload as validOrder, in the multi-item cart shape: 6 jerseys + 5 shorts. */
+function cartOrder(overrides = {}) {
+  const { design, totalKits, primarySize, ...rest } = validOrder();
+  return {
+    ...rest,
+    items: [
+      { design, size: 'M', quantity: 6 },
+      { design: { ...design, kitType: 'shorts', kitProduct: 'Football Shorts' }, size: 'L', quantity: 5 },
+    ],
+    ...overrides,
+  };
+}
+
+const countItems = async (orderId) => {
+  const [[row]] = await pool.execute(
+    'SELECT COUNT(*) AS n FROM order_items WHERE order_id = ?', [orderId],
+  );
+  return row.n;
+};
+
+const countOrdersWithKey = async (key) => {
+  const [[row]] = await pool.execute(
+    'SELECT COUNT(*) AS n FROM orders WHERE idempotency_key = ?', [key],
+  );
+  return row.n;
+};
+
+describe('POST /api/orders — cart shape', () => {
+  it('writes one order_items row per line, positioned 1..n', async () => {
+    const res = await request(app).post('/api/orders').send(cartOrder());
+    expect(res.status).toBe(201);
+
+    const [rows] = await pool.execute(
+      `SELECT position, kit_type, kit_product, size, quantity, unit_price, line_total
+       FROM order_items WHERE order_id = ? ORDER BY position`,
+      [res.body.id],
+    );
+
+    expect(rows.map((r) => r.position)).toEqual([1, 2]);
+    expect(rows.map((r) => r.kit_type)).toEqual(['jersey', 'shorts']);
+    expect(rows.map((r) => r.size)).toEqual(['M', 'L']);
+    expect(rows.map((r) => r.quantity)).toEqual([6, 5]);
+    // Money is per line and server-computed: 2800 x 6, 1500 x 5.
+    expect(rows.map((r) => r.line_total)).toEqual([16800, 7500]);
+    expect(rows[0].unit_price).toBe(2800);
+  });
+
+  it('sums totalKits across lines onto the order header', async () => {
+    const res = await request(app).post('/api/orders').send(cartOrder());
+    const [[row]] = await pool.execute('SELECT total_kits FROM orders WHERE id = ?', [res.body.id]);
+    expect(row.total_kits).toBe(11);
+    expect(res.body.pricing.totalKits).toBe(11);
+  });
+
+  it('returns per-line pricing plus one delivery charge, not one per line', async () => {
+    const res = await request(app).post('/api/orders').send(cartOrder());
+    expect(res.body.pricing.items).toHaveLength(2);
+    expect(res.body.pricing.kitPrice).toBe(16800 + 7500);
+    expect(res.body.pricing.deliveryPrice).toBe(500);           // express, charged once
+    expect(res.body.pricing.total).toBe(16800 + 7500 + 500);
+  });
+
+  /**
+   * RULE 2 ON THE PATH A CLIENT WOULD ACTUALLY USE. The legacy equivalent has been covered since
+   * the orders module was built; the cart shape is the new attack surface and had none.
+   */
+  it('ignores a tampered pricing object on the cart shape and charges the real total', async () => {
+    const res = await request(app).post('/api/orders').send(cartOrder({
+      pricing: { total: 1, kitPrice: 1, deliveryPrice: 0, discount: 99999, unitPrice: 1 },
+    }));
+
+    expect(res.status).toBe(201);
+    expect(res.body.pricing.total).toBe(24800);
+
+    const [[row]] = await pool.execute(
+      'SELECT kit_price, delivery_price, discount, total_price FROM orders WHERE id = ?',
+      [res.body.id],
+    );
+    expect(row.total_price).toBe(24800);
+    expect(row.discount).toBe(0);
+
+    // And the per-line money is server-computed too — tampering cannot reach order_items either.
+    const [lines] = await pool.execute(
+      'SELECT unit_price, line_total FROM order_items WHERE order_id = ? ORDER BY position',
+      [res.body.id],
+    );
+    expect(lines.map((l) => l.line_total)).toEqual([16800, 7500]);
+  });
+
+  it('rejects a cart whose lines total fewer than 5 kits', async () => {
+    const res = await request(app).post('/api/orders').send(cartOrder({
+      items: [{ design: validOrder().design, size: 'M', quantity: 2 }],
+    }));
+    expect(res.status).toBe(422);
+  });
+});
+
+/**
+ * THE PHASE 5 PRECONDITION, as a pair. Either half alone proves nothing: that a cart order leaves
+ * the singular columns NULL is only meaningful if a legacy order still fills them, and vice versa.
+ */
+describe('POST /api/orders — the singular columns', () => {
+  it('a cart order leaves design_json, unit_price and primary_size NULL', async () => {
+    const res = await request(app).post('/api/orders').send(cartOrder());
+    const [[row]] = await pool.execute(
+      'SELECT design_json, unit_price, primary_size FROM orders WHERE id = ?', [res.body.id],
+    );
+
+    // SQL NULL, not a JSON null — JSON.stringify(null) would have stored the string "null" and
+    // this assertion is what catches that.
+    expect(row.design_json).toBeNull();
+    expect(row.unit_price).toBeNull();
+    expect(row.primary_size).toBeNull();
+  });
+
+  it('a legacy order still populates all three', async () => {
+    const res = await request(app).post('/api/orders').send(validOrder());
+    const [[row]] = await pool.execute(
+      'SELECT design_json, unit_price, primary_size FROM orders WHERE id = ?', [res.body.id],
+    );
+
+    expect(row.design_json).not.toBeNull();
+    expect(row.design_json.kitType).toBe('jersey');   // mysql2 parses JSON columns
+    expect(row.unit_price).toBe(2800);
+    expect(row.primary_size).toBe('M');
+  });
+
+  it('a legacy order still writes exactly one line', async () => {
+    const res = await request(app).post('/api/orders').send(validOrder());
+    expect(await countItems(res.body.id)).toBe(1);
+
+    const [[line]] = await pool.execute(
+      'SELECT position, quantity, size, unit_price, line_total FROM order_items WHERE order_id = ?',
+      [res.body.id],
+    );
+    expect(line).toMatchObject({ position: 1, quantity: 11, size: 'M', unit_price: 2800, line_total: 30800 });
+  });
+});
+
+describe('POST /api/orders — idempotent replay inserts no duplicate lines', () => {
+  it.each([
+    ['cart', cartOrder, 2],
+    ['legacy', validOrder, 1],
+  ])('%s shape: the same key returns the original order and no extra lines', async (_label, build, expectedLines) => {
+    const key = randomUUID();
+    const body = build();
+
+    const first = await request(app).post('/api/orders').set('Idempotency-Key', key).send(body);
+    expect(first.status).toBe(201);
+    const before = await countItems(first.body.id);
+    expect(before).toBe(expectedLines);
+
+    const second = await request(app).post('/api/orders').set('Idempotency-Key', key).send(body);
+
+    expect(second.body.id).toBe(first.body.id);                 // the original, not a second order
+    expect(second.body.reference).toBe(first.body.reference);
+    expect(await countItems(first.body.id)).toBe(before);       // no duplicate lines
+    expect(await countOrdersWithKey(key)).toBe(1);              // exactly one row carries the key
+  });
+
+  it('a concurrent double-click races past the pre-check and still inserts one set of lines', async () => {
+    const key = randomUUID();
+    const body = cartOrder();
+
+    // Fired together so both are likely to pass findByIdempotencyKey before either commits — the
+    // path where the unique index, not the pre-check, is what saves us.
+    const [a, b] = await Promise.all([
+      request(app).post('/api/orders').set('Idempotency-Key', key).send(body),
+      request(app).post('/api/orders').set('Idempotency-Key', key).send(body),
+    ]);
+
+    expect(a.body.id).toBe(b.body.id);
+    expect(await countOrdersWithKey(key)).toBe(1);
+    // The rollback is what guarantees this: a failed header insert cannot leave lines behind.
+    expect(await countItems(a.body.id)).toBe(2);
+  });
+});
+
+describe('POST /api/orders — payload routing', () => {
+  it('rejects a body carrying BOTH items and design, naming the unrecognized key', async () => {
+    const res = await request(app).post('/api/orders').send({
+      ...validOrder(),
+      items: [{ design: validOrder().design, size: 'M', quantity: 5 }],
+    });
+
+    expect(res.status).toBe(422);
+    // This is the assertion that traps a future swap to z.union, which would report the useless
+    // "Invalid input" here while still returning 422.
+    expect(res.body.message).not.toMatch(/Invalid input/);
+    expect(res.body.message).toMatch(/design/);
+  });
+
+  it.each([
+    ['legacy', () => ({ ...validOrder(), legacyShape: true })],
+    ['cart', () => ({ ...cartOrder(), legacyShape: true })],
+    ['legacy, false', () => ({ ...validOrder(), legacyShape: false })],
+  ])('rejects a client-supplied legacyShape on the %s branch', async (_label, build) => {
+    const res = await request(app).post('/api/orders').send(build());
+    expect(res.status).toBe(422);
+    expect(res.body.message).toMatch(/legacyShape/);
+  });
+});
+
+/**
+ * THE INVARIANT THAT LICENSES PHASE 5.
+ *
+ * If no order can exist without lines, the "order_items absent -> render the legacy singular
+ * design" branch would exist for zero rows, and Phase 5 can delete it rather than carry it
+ * forever. Self-contained: it places through BOTH shapes first, then asserts across every order in
+ * the database — including the backfilled ones from migration 007 and everything this suite made.
+ */
+describe('every order has at least one line', () => {
+  it('LEFT JOIN order_items finds no orphan header, after both payload shapes', async () => {
+    const legacy = await request(app).post('/api/orders').send(validOrder());
+    const cart = await request(app).post('/api/orders').send(cartOrder());
+    expect(legacy.status).toBe(201);
+    expect(cart.status).toBe(201);
+
+    const [[row]] = await pool.execute(
+      `SELECT COUNT(*) AS orphans
+       FROM orders o
+       LEFT JOIN order_items oi ON oi.order_id = o.id
+       WHERE oi.id IS NULL`,
+    );
+    expect(row.orphans).toBe(0);
+  });
 });
 
 describe('POST /api/orders — the client never sets the price', () => {

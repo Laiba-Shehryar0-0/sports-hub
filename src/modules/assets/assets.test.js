@@ -67,6 +67,13 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  // The beforeAll guard does not cover this: vitest runs afterAll even when beforeAll has thrown
+  // (verified), so a misconfigured NODE_ENV would fail the assertion above and still delete users
+  // from the real database. Cleanup that deletes verifies its own preconditions.
+  if (env.DB_NAME !== 'kitworld_test') {
+    throw new Error(`Refusing to delete: DB_NAME is "${env.DB_NAME}", not kitworld_test.`);
+  }
+
   // Scoped to the accounts this file creates, by an explicit test-only pattern. Never an
   // unqualified DELETE (rule 16).
   await pool.execute('DELETE FROM users WHERE email LIKE ?', ['assets-%@example.com']);
