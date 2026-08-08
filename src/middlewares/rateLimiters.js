@@ -110,3 +110,34 @@ export const resendLimiter = makeLimiter({
   message: 'Too many codes requested. Please try again later.',
   keyGenerator: verifyKey,
 });
+
+/**
+ * Per USER, not per IP — the only limiter here keyed on identity rather than address.
+ *
+ * POST /api/assets sits behind requireAuth, so an account always exists to key on, and keying on
+ * IP would repeat the mistake that forced authLimiter from 20 to 60: behind NAT one abusive user
+ * would exhaust the bucket for an entire office or mobile carrier. Abuse here already costs an
+ * account, and account creation costs email verification plus authLimiter.
+ *
+ * 30/hour: each upload is a sharp decode and re-encode, so the ceiling is roughly
+ * 30 x ~200ms = ~6s of CPU per user per hour, while someone genuinely decorating kits uploads a
+ * handful. Generous for real use, bounded for abuse.
+ *
+ * Throwing on a missing req.user is the point, not paranoia. express-rate-limit would otherwise
+ * key every request on the string 'undefined', quietly collapsing every user into ONE shared
+ * bucket — a limiter that still looks present in the chain while protecting nothing. If this ever
+ * fires, the middleware order is wrong: it must come after requireAuth.
+ */
+const userKey = (req) => {
+  if (!req.user?.id) {
+    throw new Error('assetLimiter requires req.user — mount it after requireAuth.');
+  }
+  return `user:${req.user.id}`;
+};
+
+export const assetLimiter = makeLimiter({
+  windowMs: 60 * 60 * 1000,
+  max: 30,
+  message: 'Too many uploads. Please try again later.',
+  keyGenerator: userKey,
+});

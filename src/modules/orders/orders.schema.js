@@ -3,6 +3,9 @@ import { MIN_TOTAL_KITS, MAX_TOTAL_KITS } from '../pricing/pricing.constants.js'
 import {
   SHIPPING_COUNTRIES, DOMESTIC_COUNTRY, allowedDeliveryIds, isDeliveryAllowedForCountry,
 } from './orders.constants.js';
+import {
+  MAX_DATA_URL_CHARS, DATA_URL_PREFIX_RE, STORED_LOGO_URL_RE,
+} from '../assets/assets.constants.js';
 
 /**
  * The full order payload, transcribed from docs/schemas-draft.md — which corrected
@@ -72,12 +75,25 @@ const designSchema = z.object({
   textPosition: position,
   numberPosition: position,
 
-  // Bounded here; the bytes are validated by magic-byte sniffing in the assets service, which is
-  // the only thing that actually proves what this is. The prefix below is a shape check, not a
-  // security control.
-  logoDataUrl: z.string().max(8_000_000)
-    .regex(/^data:image\/(png|jpeg|jpg|webp);base64,/)
-    .nullable().default(null),
+  /**
+   * Either an inline data URL or a logo already uploaded via POST /api/assets.
+   *
+   * Both branches exist during the cart migration and afterwards. The URL branch is what the
+   * frontend sends once Phase 2.5 uploads at logo-selection; the data-URL branch stays for the
+   * offline fallback, which still produces base64 because there is no server to upload to.
+   *
+   * The URL branch is matched EXACTLY (prefix + UUID + .webp), never by `startsWith`. This value
+   * is persisted into design_json and later rendered as an <img src>, so a loose check would let
+   * a client store a path of its own choosing — a traversal string, or an off-site URL turning
+   * every order view into a tracking beacon. Only something this server minted can match.
+   *
+   * The data-URL branch is bounded here, but its prefix is a shape check, not a security control:
+   * what actually proves the type is the magic-byte sniff in the assets service.
+   */
+  logoDataUrl: z.union([
+    z.string().max(MAX_DATA_URL_CHARS).regex(DATA_URL_PREFIX_RE),
+    z.string().regex(STORED_LOGO_URL_RE),
+  ]).nullable().default(null),
   logoPreset: z.enum(['football', 'cricket', 'basketball']).nullable().default(null),
   logoScale: z.number().int().min(30).max(150),
   logoOpacity: pct,

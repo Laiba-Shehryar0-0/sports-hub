@@ -181,6 +181,41 @@ history" feature has something to key off.
 
 ---
 
+## Assets
+
+### `POST /assets`
+Uploads one logo and returns the URL to reference it by. **Requires auth** — send the bearer token
+from `/auth/login`. Request:
+```json
+{ "dataUrl": "data:image/png;base64,iVBORw0KGgo..." }
+```
+`dataUrl` is a JPEG, PNG or WebP data URL, max 8MB of base64. **SVG is rejected** — it is XML and
+can carry scripts. The declared type in the prefix is not trusted: the real format is decided by
+sniffing the decoded bytes, so an SVG sent as `image/png` is still refused.
+
+The image is re-encoded server-side (which strips EXIF/GPS), capped at 1024px on the long edge, and
+stored under a generated name. Nothing about the stored file is caller-controlled — sending a
+`filename`, a `mimetype` or any other extra key is a `422`.
+
+Response `201`:
+```json
+{ "url": "/static/logos/9f1c4e2a-3b7d-4c81-9e05-2a6f4d8b1c33.webp", "bytes": 18422 }
+```
+`url` is root-relative — never an absolute URL with a host — and is what you put in
+`design.logoDataUrl` when placing an order. Fetch it from the same origin to display the logo.
+
+Errors: `401` (not signed in), `422` (not a supported image), `429` (more than 30 uploads in an
+hour). Uploading the same image twice returns two different URLs; there is no deduplication by
+content.
+
+**`design.logoDataUrl` therefore accepts either form:** an inline `data:image/...` URL, or a
+`/static/logos/<uuid>.webp` URL returned by this endpoint. Anything else — a path with `../`, an
+absolute URL with a host, or a filename that is not one this server generated — is a `422`. A URL
+whose file no longer exists is also a `422` (`ASSET_NOT_FOUND`), so upload and order placement
+should not be separated by so long that a cleanup could run in between.
+
+---
+
 ## Suggested MySQL tables (a starting point, not mandatory)
 
 ```sql

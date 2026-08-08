@@ -1,13 +1,14 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import request from 'supertest';
 import { randomUUID } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import sharp from 'sharp';
 import { createApp } from '../../app.js';
 import { pool, closePool } from '../../db/pool.js';
 import { env } from '../../config/env.js';
 import { SHIPPING_COUNTRIES } from './orders.constants.js';
+import { storeFromDataUrl } from '../assets/assets.service.js';
 
 const app = createApp();
 
@@ -296,6 +297,66 @@ describe('POST /api/orders — logo handling', () => {
     }));
     expect(res.status).toBe(422);
     expect(res.body.code).toBe('ASSET_UNSUPPORTED_TYPE');
+  });
+
+  /**
+   * Since Phase 2 the field may already be a URL from POST /api/assets. It must be persisted
+   * verbatim and NOT re-processed — re-processing would write a second copy under a new UUID and
+   * orphan the first, which is exactly the leak docs/known-gaps.md warns cannot be cleaned up
+   * safely.
+   */
+  it('passes an already-uploaded logo URL through without writing a second file', async () => {
+    const png = await sharp({ create: { width: 24, height: 24, channels: 3, background: '#0c0' } })
+      .png().toBuffer();
+    const { url } = await storeFromDataUrl(`data:image/png;base64,${png.toString('base64')}`);
+
+    const before = readdirSync(env.LOGO_DIR).length;
+    const res = await request(app).post('/api/orders').send(validOrder({
+      design: { logoDataUrl: url },
+    }));
+
+    expect(res.status).toBe(201);
+    const [[row]] = await pool.execute(
+      'SELECT design_json FROM orders WHERE reference = ?', [res.body.reference],
+    );
+    expect(row.design_json.logoDataUrl).toBe(url);        // byte-identical, not re-minted
+    expect(readdirSync(env.LOGO_DIR).length).toBe(before); // no second copy
+  });
+
+  /**
+   * The schema can only prove the URL is SHAPED like one this server minted. assetExists is what
+   * proves the file is actually there — without it an order can reference a UUID nobody uploaded
+   * and render a broken image forever.
+   */
+  it('rejects a well-formed logo URL whose file does not exist', async () => {
+    const res = await request(app).post('/api/orders').send(validOrder({
+      design: { logoDataUrl: '/static/logos/ffffffff-ffff-4fff-8fff-ffffffffffff.webp' },
+    }));
+
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe('ASSET_NOT_FOUND');
+    // The user-facing message must not name a directory or a driver code (rule 14).
+    expect(res.body.message).not.toMatch(/logos|Temp|ENOENT|LOGO_DIR/);
+  });
+
+  /**
+   * The URL branch is matched exactly, never by prefix. These are the payloads a loose
+   * `startsWith('/static/logos/')` check would accept and persist into an <img src>.
+   */
+  it.each([
+    ['traversal', '/static/logos/../../../../etc/passwd'],
+    ['traversal via encoded segment', '/static/logos/..%2f..%2fsecret.webp'],
+    ['off-site absolute URL', 'https://evil.example.com/track.webp'],
+    ['protocol-relative URL', '//evil.example.com/track.webp'],
+    ['right prefix, arbitrary name', '/static/logos/not-a-uuid.webp'],
+    ['right prefix, wrong extension', '/static/logos/088f2e63-8f49-4a03-8af6-fd46fcbe6f13.svg'],
+    ['nested path under the prefix', '/static/logos/a/088f2e63-8f49-4a03-8af6-fd46fcbe6f13.webp'],
+  ])('rejects a forged logo URL: %s', async (_label, logoDataUrl) => {
+    const res = await request(app).post('/api/orders').send(validOrder({
+      design: { logoDataUrl },
+    }));
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
   });
 });
 

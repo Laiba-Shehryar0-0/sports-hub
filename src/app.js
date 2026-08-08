@@ -14,6 +14,7 @@ import { AppError } from './utils/AppError.js';
 import catalogRouter from './modules/catalog/catalog.routes.js';
 import authRouter from './modules/auth/auth.routes.js';
 import ordersRouter from './modules/orders/orders.routes.js';
+import assetsRouter from './modules/assets/assets.routes.js';
 
 // One options object for both static mounts below, so the two cannot drift apart — a logo served
 // without nosniff while kit images have it would be an easy thing not to notice.
@@ -88,6 +89,10 @@ export function createApp() {
   // ordersRouter mounts its own 6mb express.json() internally — the global 100kb cap above
   // stays in force for every other route (CLAUDE.md rule 10).
   app.use('/api/orders', ordersRouter);
+
+  // assetsRouter mounts its own requireAuth + 6mb express.json() internally, in that order — see
+  // the comment there for why authentication precedes the body parser on this route.
+  app.use('/api/assets', assetsRouter);
 
   // Remaining feature routers mount here, e.g.:
   // app.use('/api/contact', contactRouter);

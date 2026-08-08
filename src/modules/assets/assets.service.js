@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { mkdirSync, realpathSync } from 'node:fs';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { access, mkdir, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import sharp from 'sharp';
@@ -8,6 +8,7 @@ import { fileTypeFromBuffer } from 'file-type';
 import { env } from '../../config/env.js';
 import { AppError } from '../../utils/AppError.js';
 import { logger } from '../../utils/logger.js';
+import { LOGO_URL_PREFIX, isStoredLogoUrl } from './assets.constants.js';
 
 /**
  * Turns a client-supplied image into a stored file and a URL.
@@ -19,7 +20,10 @@ import { logger } from '../../utils/logger.js';
 // From config, not from this file's __dirname. app.js derives the serve path from the same
 // config, so the two can no longer drift apart.
 const LOGO_DIR = env.LOGO_DIR;
-const PUBLIC_PREFIX = '/static/logos';
+
+// Imported, not redeclared: STORED_LOGO_URL_RE in the same file validates URLs built from this
+// prefix, and a second copy here could drift from the pattern that has to match it.
+const PUBLIC_PREFIX = LOGO_URL_PREFIX;
 
 /**
  * TEST-MODE WRITE GUARD — throws at import, before a single file can be written.
@@ -167,4 +171,34 @@ export async function storeFromDataUrl(dataUrl, { ownerUserId = null } = {}) {
 /** True for a value that looks like an inline image the caller should hand to storeFromDataUrl. */
 export function isImageDataUrl(value) {
   return typeof value === 'string' && value.startsWith('data:image/');
+}
+
+/**
+ * True if `url` is a logo this server minted AND the file is still on disk.
+ *
+ * Lives here rather than as a raw fs.access at the call site because this module owns LOGO_DIR.
+ * When storage moves to an object store, this one function changes and nothing else does.
+ *
+ * THE SHAPE GATE COMES FIRST, and is not optional: it is what makes the path join safe. Only after
+ * isStoredLogoUrl has proved the value is `/static/logos/<uuid>.webp` may any part of it reach the
+ * filesystem — CLAUDE.md rule 5, never build a path from a client-supplied string. path.basename
+ * is belt-and-braces on top of that, so a future loosening of the regex cannot turn this into a
+ * traversal.
+ *
+ * Returns false rather than throwing for both "wrong shape" and "not there": the caller decides
+ * what a miss means, exactly as findKitPrice does not distinguish missing from deactivated.
+ *
+ * Inherently TOCTOU — the file can be removed between this check and the read that displays it.
+ * It is a guard against a caller referencing a UUID that was never uploaded, not a guarantee of
+ * durability.
+ */
+export async function assetExists(url) {
+  if (!isStoredLogoUrl(url)) return false;
+
+  try {
+    await access(path.join(LOGO_DIR, path.basename(url)));
+    return true;
+  } catch {
+    return false;
+  }
 }
