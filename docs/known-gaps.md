@@ -179,15 +179,65 @@ Two of the three were found only because the third prompted a closer look.
 
 The pure-logic modules are covered by ad-hoc Node harnesses — `cart.js` 50 assertions,
 `logoUpload.js` 57, `designStorage.js` 15 — which is why they were extracted in the first place.
-But those harnesses live in a scratchpad, not the repo, and **nothing at all covers the React
-layer**, which is where all three of the above lived.
 
-**Proposal, for after Phase 5:** add `vitest` + `@testing-library/react` + `jsdom` to kit-frontend
-and move the existing harnesses into the repo as real test files. The argument is the count above:
-three real bugs in one code path, all found by reading, in a repo where reading is currently the
-only control. Deliberately deferred rather than done now — it is a dependency decision and a
-test-infrastructure decision, not a cart feature, and taking it mid-phase would stall the work it
-is meant to protect.
+**Updated 2026-08-09 — the React layer is no longer unreachable, and the proposal got cheaper.**
+A scratchpad Node loader now stubs image imports, resolves Vite-style extensionless imports, and
+transpiles JSX with esbuild (already a Vite dependency). `react-dom/server.renderToStaticMarkup`
+then renders real components in Node — which is how the `KitPreview` SVG id collision was caught
+and proved: two instances emitted 10 ids of which only 5 were unique, so two jerseys in different
+colours painted the same colour. 24 assertions now cover that component.
+
+**What renderToStaticMarkup does NOT reach**, and what the remaining proposal is actually for:
+
+- **Effects.** `useEffect` never runs during server rendering, so the whole gated-replay class
+  above — the bugs that motivated this entry — is still untestable this way.
+- **Events and state transitions.** No click, no stepper, no debounce, no re-render.
+- **Anything DOM-dependent**: `localStorage`, `URL.createObjectURL`, `FileReader`.
+
+So the remaining cost is `vitest` + `jsdom` + `@testing-library/react`, not the transform pipeline.
+And **vitest would delete the loader rather than need it**: it runs files through Vite, so JSX,
+asset imports and extensionless resolution all work natively. The loader is a stopgap whose only
+justification is that there is no runner yet.
+
+**DECIDED 2026-08-09 — adopt vitest AFTER Phase 3, BEFORE Phase 4.** Not now and not Phase 5.
+
+It is test infrastructure rather than a cart feature, so it should not stall the last step of
+Phase 3. But **Phase 4 rewrites `Checkout.jsx`** — the one file where a mistake charges someone
+the wrong amount — and that should land with coverage rather than without it. Waiting until after
+Phase 5 would mean the riskiest rewrite in the project happens in the window where reading is
+still the only control.
+
+Scope when it lands: `vitest` + `jsdom` + `@testing-library/react`, and move the ~150 existing
+assertions into the repo. They currently live in a scratchpad and are discarded at the end of every
+session, so the coverage is rewritten from scratch each time anyone needs it.
+
+**The scratchpad loader is deliberately NOT being committed.** It is the option that costs
+maintenance — a second module-resolution pipeline that must track `vite.config.js` and silently
+diverges when it does not — without buying the effects-and-events layer where the real bugs live.
+Vitest removes the need for it entirely.
+
+---
+
+## 🟡 A kit drawn on in the Kit Editor shows as its base SVG in the cart
+
+Frontend. Cart lines render the design with `KitPreview`, the real SVG renderer, so a thumbnail
+cannot drift from the kit and costs no storage. But a kit that has been **drawn on in the Kit
+Editor** appears as its plain SVG: the freehand work is missing from the thumbnail.
+
+**Why, and why it is not simply a bug:** the flattened PNG lives in a single global
+`kitlab_edited_kit` key, not per cart item. `Checkout.jsx` can show it because it deals with one
+design at a time; the cart has N lines and there is no per-line image to look up. Whichever line
+you rendered it against would be a guess, and for at least N-1 lines a wrong one.
+
+**Storing a per-item snapshot is the obvious fix and is rejected** for the reasons in the cart
+thumbnail decision: it stores a derived artifact beside its source so the two can disagree, and it
+spends the localStorage budget Phases 0.5 and 2.5 were spent reclaiming (~5-15KB per PNG × up to 20
+lines).
+
+**Real fix, when order history lands in Phase 5:** the drawn-on image should be an uploaded asset
+with a URL, exactly as logos became in Phase 2 — at which point it is a field on the design like
+any other, and the cart renders it with no special case. Until then the thumbnail identifies the
+line by shape, colours, template, name and number, which is what it is for.
 
 ---
 
