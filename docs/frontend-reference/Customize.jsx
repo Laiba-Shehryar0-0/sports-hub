@@ -1,4 +1,4 @@
-// Snapshot of ../kit-frontend as of 2026-08-08 — reference only, do not edit here.
+// Snapshot of ../kit-frontend as of 2026-08-09 — reference only, do not edit here.
 // Source: src/pages/Customize.jsx
 
 import { useState, useRef, useCallback, useEffect } from 'react';
@@ -19,6 +19,7 @@ import {
   uploadLogoSequenced, createUploadSequencer, readFileAsDataUrl, ACCEPTED_LOGO_TYPES,
 } from '../customize/logoUpload';
 import { uploadLogoAsset } from '../api/assetsService';
+import { useCart } from '../context/CartContext';
 import {
   IconSelect, IconDraw, IconText, IconUndo, IconRedo, IconSave, IconExport,
   IconLayers, IconEye, IconEyeOff, IconGrip, IconUpload, IconPlus, IconMinus, IconPan,
@@ -185,6 +186,24 @@ export default function Customize() {
   const lastAutosaveError = useRef(null);
 
   /**
+   * ┌─ EVERY GATED ACTION MUST READ THE DESIGN FROM HERE, NOT FROM THE `design` BINDING ──────────┐
+   * │                                                                                            │
+   * │ gated() hands its `run` callback to AuthContext, which stores it and calls intent.run()     │
+   * │ after sign-in. That callback is a closure from the render in which the button was CLICKED.  │
+   * │ The auth modal can stay open for a minute, and the user can keep editing behind it — so a   │
+   * │ closure over `design` acts on the design as it was BEFORE they signed in, silently          │
+   * │ discarding everything they changed while the modal was up.                                  │
+   * │                                                                                            │
+   * │ This ref is reassigned on every render, so a stale closure still reads what is on screen    │
+   * │ now. handleSave and handleAddToCart both use it; anything new that goes through gated()     │
+   * │ must too. It is the same class as the stale-response race in Phase 2.5 — there a slow       │
+   * │ response overwrote a newer one, here a slow user does.                                     │
+   * └────────────────────────────────────────────────────────────────────────────────────────────┘
+   */
+  const designRef = useRef(design);
+  designRef.current = design;
+
+  /**
    * The local preview, held OUTSIDE `design` on purpose — this is the whole point of the phase.
    *
    * `design` is (a) serialised into localStorage by the autosave effect on every change and (b)
@@ -203,6 +222,7 @@ export default function Customize() {
   const panState = useRef({ dragging: false, startX: 0, startY: 0, originX: 0, originY: 0 });
   const navigate = useNavigate();
   const { user, openSignIn } = useAuth();
+  const { add: addToCart, maxItems: cartMax } = useCart();
 
   const selectTool = useCallback((tool, tab) => {
     setActiveTool(tool);
@@ -327,8 +347,12 @@ export default function Customize() {
   }, [setDesign, invalidateEditedKit]);
 
   const handleSave = useCallback(() => {
+    // Via the ref, not `design` — this runs through gated(), so it can be replayed after sign-in
+    // with a closure captured before the modal opened. See the boxed comment above.
+    const current = designRef.current;
+
     const saved = readSavedDesigns();
-    saved.push({ ...design, id: Date.now(), kitTypeLabel: design.kitProduct || KIT_TYPES.find(k => k.id === design.kitType)?.label });
+    saved.push({ ...current, id: Date.now(), kitTypeLabel: current.kitProduct || KIT_TYPES.find(k => k.id === current.kitType)?.label });
 
     const failure = writeStorage(SAVED_DESIGNS_KEY, JSON.stringify(capSavedDesigns(saved)));
 
@@ -340,7 +364,9 @@ export default function Customize() {
     // reads these entries back (see the known-gaps entry).
     if (failure) showError(STORAGE_MESSAGE[failure]);
     else showInfo('Design saved to this browser');
-  }, [design, showError, showInfo]);
+    // No `design` dependency: the value is read from designRef at call time, so re-creating this
+    // callback per design change would achieve nothing except a new closure to go stale.
+  }, [showError, showInfo]);
 
   const handleExport = useCallback(() => {
     const svgEl = previewRef.current?.querySelector('svg');
@@ -421,6 +447,18 @@ export default function Customize() {
     if (result.offline) showError(result.message);
   }, [patch, openSignIn, openFilePicker, showError]);
 
+  // Reads designRef, not `design` — gated action, see the boxed comment where the ref is declared.
+  const handleAddToCart = useCallback(() => {
+    const current = designRef.current;
+    const result = addToCart({ design: current, size: current.size, quantity: 1 });
+
+    if (result.error === 'cart-full') {
+      showError(`Your cart is full (${cartMax} designs). Remove one to add another.`);
+      return;
+    }
+    showInfo(result.merged ? 'Added — quantity updated' : 'Added to cart');
+  }, [addToCart, cartMax, showError, showInfo]);
+
   /**
    * Wraps an action so a logged-out user gets the auth modal instead of a silent no-op. The
    * intent is handed to the modal, which resumes it on success and leaves the user on this page.
@@ -433,6 +471,7 @@ export default function Customize() {
   const guardedSave = gated('customize:save', 'save your design', handleSave);
   const guardedExport = gated('customize:export', 'export your design', handleExport);
   const guardedUpload = gated('customize:upload', 'upload a logo', openFilePicker);
+  const guardedAddToCart = gated('customize:add-to-cart', 'add this design to your cart', handleAddToCart);
 
   /**
    * THE WRITE IS A PRECONDITION OF NAVIGATING, not a side effect of it.
@@ -481,6 +520,11 @@ export default function Customize() {
           <ToolBtn onClick={guardedSave} title="Save"><IconSave /></ToolBtn>
           <button onClick={guardedExport} className={`btn btn-grey ${exportBtnCls}`}>
             <IconExport /> Export
+          </button>
+          {/* Synchronous — Phase 2.5 means the design already carries a logo URL, so there is no
+              upload to wait on here and no spinner to show. */}
+          <button onClick={guardedAddToCart} className={`btn btn-grey ${exportBtnCls}`}>
+            Add to Cart
           </button>
           <button onClick={handlePlaceOrder} className={`btn btn-darkred ${exportBtnCls}`}>
             Place Order

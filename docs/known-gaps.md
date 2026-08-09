@@ -122,6 +122,75 @@ they carry the quota-vs-blocked distinction, including the Safari private-mode c
 
 ---
 
+## ✅ A gated action replayed after sign-in ran against not-yet-propagated state — FIXED 2026-08-09
+
+*Kept as a record because the failure is invisible: the action simply does not happen, with no
+error anywhere.*
+
+Frontend. `AuthContext.completeSignIn` called `intent.run()` **synchronously**, in the same tick as
+`setUser()`. React had not re-rendered, so every consumer of `user` still saw the logged-out value
+while the resumed action executed.
+
+Harmless for three of the four gated actions — Save, Export and Upload do not read `user`. **Add to
+Cart does**: the cart is namespaced by user id. The replayed add therefore computed against an
+empty cart (so it could never report a merge), `persist` saw `userId === null` and wrote nothing,
+and the in-memory line was then overwritten when the cart loaded for the real user. **The design
+vanished with no message.** A wrong toast was the visible symptom; total loss was the actual
+behaviour.
+
+**Two things made the naive fix wrong.** `AuthModal` calls `closeModal()` on the line after
+`await signIn(...)`, and `closeModal` clears the pending intent — fine while the replay was
+synchronous (it had already run), fatal once it moves to an effect reading the same ref. And
+StrictMode double-invokes effects in development, so a replay effect must be idempotent.
+
+**Fix:** a two-hop handoff. `completeSignIn` moves the intent into a separate `replayRef` and
+clears the pending slot; `closeModal` clears only the pending slot, so the replay survives it. An
+effect on `user` drains `replayRef`, **nulling it before invoking** — the same clear-before-run
+guard as the original, preserved across both hops, which is what makes a StrictMode double-invoke,
+a throw inside `run()`, and any later `user` change all no-ops.
+
+**The other half:** `CartContext`'s mutators now read `items` and `userId` from refs. Replaying
+after propagation makes the cart *load* first; the refs make the mutators *see* it. Neither half
+is sufficient alone, and that is the part most likely to be undone by someone tidying up "unused"
+refs later.
+
+**General rule this leaves behind:** any callback handed to a replay mechanism must read live
+state, not captured state. Three places now follow it — `designRef` in `Customize.jsx`,
+`itemsRef`/`userIdRef` in `CartContext.jsx`, and `replayRef` here.
+
+---
+
+## 🟠 kit-frontend has no test runner, and it is now where the subtle bugs are
+
+Every frontend bug found so far has been found by **reading**, not by testing. In the gated-replay
+path alone, three separate defects were caught that way — and all three are invisible at runtime,
+producing a silently missing action rather than an error:
+
+1. **Stale design closure** — a gated action replayed after sign-in acted on the design as it was
+   before the auth modal opened, discarding edits made while signing in.
+2. **Synchronous replay against unpropagated state** — `intent.run()` executed before React
+   re-rendered, so the resumed action saw the logged-out `user` (entry above).
+3. **Stale context mutators** — the replayed callback held `CartContext.add` from the logged-out
+   render, so it computed against an empty cart and persisted nothing.
+
+None would have been caught by a click-through: the happy path works, and each failure needs a
+specific interleaving (edit *while* the modal is open, or an existing cart line to merge into).
+Two of the three were found only because the third prompted a closer look.
+
+The pure-logic modules are covered by ad-hoc Node harnesses — `cart.js` 50 assertions,
+`logoUpload.js` 57, `designStorage.js` 15 — which is why they were extracted in the first place.
+But those harnesses live in a scratchpad, not the repo, and **nothing at all covers the React
+layer**, which is where all three of the above lived.
+
+**Proposal, for after Phase 5:** add `vitest` + `@testing-library/react` + `jsdom` to kit-frontend
+and move the existing harnesses into the repo as real test files. The argument is the count above:
+three real bugs in one code path, all found by reading, in a repo where reading is currently the
+only control. Deliberately deferred rather than done now — it is a dependency decision and a
+test-infrastructure decision, not a cart feature, and taking it mid-phase would stall the work it
+is meant to protect.
+
+---
+
 ## 🟡 An idempotent replay of a cart order returns a slightly different shape
 
 `POST /orders` returns `pricing` built by `computeCartPricing`, whose per-line objects include
