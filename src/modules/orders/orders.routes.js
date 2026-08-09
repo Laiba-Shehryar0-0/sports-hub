@@ -2,11 +2,31 @@ import { Router } from 'express';
 import express from 'express';
 import { validate } from '../../middlewares/validate.js';
 import { optionalAuth } from '../../middlewares/optionalAuth.js';
-import { orderLimiter } from '../../middlewares/rateLimiters.js';
-import { createOrderSchema } from './orders.schema.js';
-import { createOrder } from './orders.controller.js';
+import { requireAuth } from '../../middlewares/requireAuth.js';
+import { orderLimiter, quoteLimiter } from '../../middlewares/rateLimiters.js';
+import { createOrderSchema, quoteSchema } from './orders.schema.js';
+import { createOrder, quoteOrder } from './orders.controller.js';
 
 const router = Router();
+
+/**
+ * POST /api/orders/quote — price a cart, create nothing.
+ *
+ * requireAuth, unlike POST / below: Add to Cart is gated, so a cart only exists for a signed-in
+ * user and there is no anonymous caller to serve. It also runs BEFORE the body parser, so an
+ * unauthenticated request is refused without the server buffering 6mb — the same ordering as
+ * /api/assets. POST / cannot do that, because guests must be able to check out.
+ *
+ * quoteLimiter keys on req.user.id, so it must follow requireAuth.
+ */
+router.post(
+  '/quote',
+  requireAuth,
+  quoteLimiter,
+  express.json({ limit: '6mb' }),
+  validate(quoteSchema),
+  quoteOrder,
+);
 
 /**
  * The 6mb body parser is mounted HERE, on this route only — the global cap in app.js stays at

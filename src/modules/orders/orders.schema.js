@@ -226,6 +226,24 @@ export const createOrderSchema = {
   },
 };
 
+/**
+ * POST /orders/quote — price a cart in progress. Creates nothing.
+ *
+ * Its OWN schema, not createOrderSchema: the cart page has no contact details and no address, and
+ * demanding them to see a price would be absurd. It reuses cartItemSchema so a line that quotes is
+ * a line that can be ordered, with no second definition to drift.
+ *
+ * No delivery/country superRefine either — that rule needs an address, which arrives at checkout.
+ * The cart page sends 'standard' purely so the arithmetic has a delivery row to read; the figure
+ * is labelled "delivery calculated at checkout" in the UI.
+ */
+export const quoteSchema = z.object({
+  items: z.array(cartItemSchema)
+    .min(1, 'Your cart is empty.')
+    .max(MAX_CART_ITEMS, `A cart can hold at most ${MAX_CART_ITEMS} designs.`),
+  deliveryId: z.enum(['standard', 'express', 'rush', 'international']),
+}).strict();
+
 // A UUID sent per checkout attempt so a double-click returns the first order rather than
 // creating a second. Optional: the frontend did not send one historically, and an order without
 // a key is still a valid order — just unprotected.

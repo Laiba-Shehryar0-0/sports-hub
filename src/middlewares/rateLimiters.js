@@ -141,3 +141,22 @@ export const assetLimiter = makeLimiter({
   message: 'Too many uploads. Please try again later.',
   keyGenerator: userKey,
 });
+
+/**
+ * Also per user, and deliberately generous.
+ *
+ * /orders/quote is called on cart load and after every debounced quantity change, so a limit sized
+ * like orderLimiter (10/hr) would break ordinary use — a user adjusting quantities on a five-line
+ * cart could exhaust it in a minute, and the cart page would then show no prices at all, which is
+ * worse than the abuse it prevents.
+ *
+ * 120/hour is a sustained quote every 30 seconds, far above real use. The ceiling is cheap: the
+ * endpoint CREATES NOTHING and its work is two indexed reads plus a few filesystem stats, so the
+ * worst case is not comparable to an upload's sharp pipeline or an order's transaction.
+ */
+export const quoteLimiter = makeLimiter({
+  windowMs: 60 * 60 * 1000,
+  max: 120,
+  message: 'Too many pricing requests. Please try again in a moment.',
+  keyGenerator: userKey,
+});

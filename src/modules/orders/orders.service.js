@@ -1,6 +1,6 @@
 import * as ordersRepository from './orders.repository.js';
 import { computeCartPricing } from '../pricing/pricing.service.js';
-import { TEMPLATE_NAMES, SPORT_LABELS } from '../pricing/pricing.constants.js';
+import { TEMPLATE_NAMES, SPORT_LABELS, MIN_TOTAL_KITS } from '../pricing/pricing.constants.js';
 import { storeFromDataUrl, isImageDataUrl, assetExists } from '../assets/assets.service.js';
 import { withTransaction } from '../../db/tx.js';
 import { logger } from '../../utils/logger.js';
@@ -139,6 +139,76 @@ export async function placeOrder({ body, userId = null, idempotencyKey = null, i
     }
     throw err;
   }
+}
+
+/**
+ * Prices a cart in progress. CREATES NOTHING — no order, no lines, no files.
+ *
+ * Exists because the cart page must not compute prices itself (rule 2), and because a cart can sit
+ * in localStorage for weeks: a kit type can be retired and an uploaded logo can be swept away
+ * while a line still references it. Both surface HERE, on the cart page, with the offending lines
+ * named — never as a 422 at the moment of payment.
+ */
+export async function quoteCart({ items, deliveryId }) {
+  // ── Logos first, so BOTH classes of problem can be reported together ───────────────────────
+  // Pricing throws on an unknown kit type, which would end the request before any logo was
+  // checked. Checking logos first means a cart with both faults names both, instead of the user
+  // fixing one, re-quoting, and discovering the other.
+  //
+  // A data URL is skipped: it is the offline fallback, has no stored file to find, and is
+  // converted server-side at order time.
+  const missingLogoPositions = [];
+  await Promise.all(items.map(async (item, index) => {
+    const url = item.design.logoDataUrl;
+    if (url === null || isImageDataUrl(url)) return;
+    if (!await assetExists(url)) missingLogoPositions.push(index + 1);
+  }));
+  missingLogoPositions.sort((a, b) => a - b);   // Promise.all resolves out of order
+
+  let pricing = null;
+  let unavailableKitTypes = [];
+
+  try {
+    pricing = await computeCartPricing({
+      items: items.map((item) => ({
+        kitType: item.design.kitType,
+        template: item.design.template,
+        sport: item.design.sport,
+        size: item.size,
+        quantity: item.quantity,
+      })),
+      deliveryId,
+      // The floor is order eligibility, not a pricing rule. A 3-kit cart still gets prices so the
+      // page can show a running total; POST /orders enforces the minimum for real.
+      enforceMinimum: false,
+    });
+  } catch (err) {
+    // ONLY the retired-kit case is absorbed into the combined report. Everything else rethrows.
+    //
+    // A bare catch here would swallow PRICING_EMPTY_CART, PRICING_INVALID_QUANTITY,
+    // PRICING_TOO_MANY_ITEMS and PRICING_UNKNOWN_DELIVERY into a generic "unavailable" response —
+    // the right status with a message that names the wrong problem, which is the same failure
+    // class as "Validation failed." There is a test asserting a bad deliveryId still surfaces as
+    // PRICING_UNKNOWN_DELIVERY.
+    if (err.code !== 'PRICING_UNKNOWN_KIT_TYPE') throw err;
+    unavailableKitTypes = err.details?.kitTypes ?? [];
+  }
+
+  if (unavailableKitTypes.length > 0 || missingLogoPositions.length > 0) {
+    throw new AppError('Some items in your cart are no longer available.', {
+      statusCode: 422,
+      code: 'QUOTE_UNAVAILABLE',
+      details: { unavailableKitTypes, missingLogoPositions },
+    });
+  }
+
+  return {
+    ...pricing,
+    // Server-supplied so the cart page renders "add N more" from this, never from a hardcoded 5.
+    // MIN_TOTAL_KITS lives in one place and that place is not the frontend.
+    belowMinimum: pricing.totalKits < MIN_TOTAL_KITS,
+    minimumKits: MIN_TOTAL_KITS,
+  };
 }
 
 /**

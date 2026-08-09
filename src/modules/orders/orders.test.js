@@ -78,6 +78,14 @@ afterAll(async () => {
      WHERE o.contact_json->>'$.email' LIKE '%@example.com'`,
   );
   await pool.execute("DELETE FROM orders WHERE contact_json->>'$.email' LIKE '%@example.com'");
+
+  // The quote tests need a signed-in user, so this suite now creates accounts too. Scoped to the
+  // exact prefixes it uses — orders.user_id is ON DELETE SET NULL, so this cannot orphan an order.
+  await pool.execute(
+    'DELETE FROM users WHERE email LIKE ? OR email LIKE ?',
+    ['quote-%@example.com', 'floor-%@example.com'],
+  );
+
   await closePool();
 });
 
@@ -281,6 +289,188 @@ describe('POST /api/orders — payload routing', () => {
     const res = await request(app).post('/api/orders').send(build());
     expect(res.status).toBe(422);
     expect(res.body.message).toMatch(/legacyShape/);
+  });
+});
+
+describe('POST /api/orders/quote', () => {
+  let token;
+
+  beforeAll(async () => {
+    const email = `quote-${Date.now()}@example.com`;
+    const password = 'Str0ng-Passw0rd!';
+    await request(app).post('/api/auth/register').send({ name: 'Quoter', email, password });
+    await pool.execute(
+      'UPDATE users SET email_verified_at = NOW() WHERE email = ? AND email LIKE ?',
+      [email, 'quote-%@example.com'],
+    );
+    const res = await request(app).post('/api/auth/login').send({ email, password });
+    token = res.body.token;
+  });
+
+  const quote = (body) => request(app).post('/api/orders/quote')
+    .set('Authorization', `Bearer ${token}`)
+    .send(body);
+
+  const quoteBody = (items, deliveryId = 'standard') => ({ items, deliveryId });
+  const line = (over = {}) => ({ design: validOrder().design, size: 'M', quantity: 6, ...over });
+
+  it('requires authentication', async () => {
+    const res = await request(app).post('/api/orders/quote').send(quoteBody([line()]));
+    expect(res.status).toBe(401);
+  });
+
+  it('prices a multi-line cart and creates NOTHING', async () => {
+    const [[before]] = await pool.execute('SELECT COUNT(*) AS n FROM orders');
+
+    const res = await quote(quoteBody([
+      line({ quantity: 6 }),
+      line({ design: { ...validOrder().design, kitType: 'shorts' }, size: 'L', quantity: 5 }),
+    ]));
+
+    expect(res.status).toBe(200);
+    expect(res.body.items).toHaveLength(2);
+    expect(res.body.totalKits).toBe(11);
+    expect(res.body.kitPrice).toBe(2800 * 6 + 1500 * 5);
+
+    const [[after]] = await pool.execute('SELECT COUNT(*) AS n FROM orders');
+    expect(after.n).toBe(before.n);   // no order row, no lines, nothing persisted
+  });
+
+  /**
+   * The case that argued for enforceMinimum: a cart below the 5-kit floor must still return
+   * prices, or the page has nothing to display while the user is deciding whether to add more —
+   * and a page that cannot get prices from the server computes them itself, which is what rule 2
+   * forbids.
+   */
+  it('prices a cart below the minimum and says so, rather than refusing', async () => {
+    const res = await quote(quoteBody([line({ quantity: 3 })]));
+
+    expect(res.status).toBe(200);
+    expect(res.body.totalKits).toBe(3);
+    expect(res.body.kitPrice).toBe(2800 * 3);
+    expect(res.body.belowMinimum).toBe(true);
+    // Served so the cart page renders "add N more" from this, never from a hardcoded 5.
+    expect(res.body.minimumKits).toBe(5);
+  });
+
+  it('reports belowMinimum false once the cart reaches the floor', async () => {
+    const res = await quote(quoteBody([line({ quantity: 5 })]));
+    expect(res.body.belowMinimum).toBe(false);
+    expect(res.body.minimumKits).toBe(5);
+  });
+
+  it('still refuses a cart over the ceiling, with a message about the ceiling', async () => {
+    const res = await quote(quoteBody([line({ quantity: 500 }), line({ design: { ...validOrder().design, kitType: 'cap' }, quantity: 1 })]));
+
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe('PRICING_INVALID_QUANTITY');
+    // The floor and ceiling messages diverged when the flag split them; a 501-kit cart must not be
+    // told about a 5-kit minimum.
+    expect(res.body.message).toMatch(/cannot exceed 500/);
+    expect(res.body.message).not.toMatch(/at least 5/);
+  });
+
+  /**
+   * THE NARROW CATCH. A bare catch around computeCartPricing would fold every pricing error into
+   * QUOTE_UNAVAILABLE — the right status with a message naming the wrong problem.
+   */
+  it('surfaces an unknown deliveryId as itself, not as QUOTE_UNAVAILABLE', async () => {
+    const res = await quote(quoteBody([line()], 'teleport'));
+    // Caught by the schema enum before pricing, which is the correct layer.
+    expect(res.status).toBe(422);
+    expect(res.body.code).not.toBe('QUOTE_UNAVAILABLE');
+  });
+
+  it('surfaces a deactivated delivery method as PRICING_UNKNOWN_DELIVERY, not QUOTE_UNAVAILABLE', async () => {
+    await pool.execute("UPDATE delivery_methods SET is_active = 0 WHERE id = 'rush'");
+    try {
+      const res = await quote(quoteBody([line()], 'rush'));
+      expect(res.status).toBe(422);
+      expect(res.body.code).toBe('PRICING_UNKNOWN_DELIVERY');
+      expect(res.body.code).not.toBe('QUOTE_UNAVAILABLE');
+    } finally {
+      await pool.execute("UPDATE delivery_methods SET is_active = 1 WHERE id = 'rush'");
+    }
+  });
+
+  it('names every unavailable kit type at once, not one per reload', async () => {
+    await pool.execute("UPDATE kit_prices SET is_active = 0 WHERE kit_type IN ('socks', 'cap')");
+    try {
+      const res = await quote(quoteBody([
+        line({ design: { ...validOrder().design, kitType: 'socks' } }),
+        line(),
+        line({ design: { ...validOrder().design, kitType: 'cap' } }),
+      ]));
+
+      expect(res.status).toBe(422);
+      expect(res.body.code).toBe('QUOTE_UNAVAILABLE');
+      expect(res.body.details.unavailableKitTypes.sort()).toEqual(['cap', 'socks']);
+    } finally {
+      await pool.execute("UPDATE kit_prices SET is_active = 1 WHERE kit_type IN ('socks', 'cap')");
+    }
+  });
+
+  it('names a line whose uploaded logo has been swept away', async () => {
+    const res = await quote(quoteBody([
+      line(),
+      line({ design: { ...validOrder().design, logoDataUrl: '/static/logos/ffffffff-ffff-4fff-8fff-ffffffffffff.webp' } }),
+    ]));
+
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe('QUOTE_UNAVAILABLE');
+    expect(res.body.details.missingLogoPositions).toEqual([2]);   // 1-based, matching order_items
+  });
+
+  it('reports a missing logo AND a retired kit together', async () => {
+    await pool.execute("UPDATE kit_prices SET is_active = 0 WHERE kit_type = 'socks'");
+    try {
+      const res = await quote(quoteBody([
+        line({ design: { ...validOrder().design, kitType: 'socks' } }),
+        line({ design: { ...validOrder().design, logoDataUrl: '/static/logos/ffffffff-ffff-4fff-8fff-ffffffffffff.webp' } }),
+      ]));
+
+      // The point of checking logos before pricing: one round trip reports both faults.
+      expect(res.body.details.unavailableKitTypes).toEqual(['socks']);
+      expect(res.body.details.missingLogoPositions).toEqual([2]);
+    } finally {
+      await pool.execute("UPDATE kit_prices SET is_active = 1 WHERE kit_type = 'socks'");
+    }
+  });
+});
+
+/**
+ * REQUIREMENT 4 — the flag makes the floor optional for DISPLAY and it must stay mandatory for
+ * ORDERING. This is the thing most likely to rot: someone adds enforceMinimum: false to the order
+ * path to "fix" a failing checkout and the 5-kit floor quietly stops existing.
+ */
+describe('the 5-kit floor is still mandatory for ordering', () => {
+  it.each([
+    ['cart', () => cartOrder({ items: [{ design: validOrder().design, size: 'M', quantity: 3 }] })],
+    ['legacy', () => validOrder({ root: { totalKits: 3 } })],
+  ])('%s shape: a 3-kit order is rejected', async (_label, build) => {
+    const res = await request(app).post('/api/orders').send(build());
+    expect(res.status).toBe(422);
+  });
+
+  it('a 3-kit cart QUOTES fine but does not ORDER — the two must disagree', async () => {
+    const items = [{ design: validOrder().design, size: 'M', quantity: 3 }];
+
+    const email = `floor-${Date.now()}@example.com`;
+    await request(app).post('/api/auth/register').send({ name: 'Floor', email, password: 'Str0ng-Passw0rd!' });
+    await pool.execute(
+      'UPDATE users SET email_verified_at = NOW() WHERE email = ? AND email LIKE ?',
+      [email, 'floor-%@example.com'],
+    );
+    const login = await request(app).post('/api/auth/login').send({ email, password: 'Str0ng-Passw0rd!' });
+
+    const quoted = await request(app).post('/api/orders/quote')
+      .set('Authorization', `Bearer ${login.body.token}`)
+      .send({ items, deliveryId: 'standard' });
+    const ordered = await request(app).post('/api/orders').send(cartOrder({ items }));
+
+    expect(quoted.status).toBe(200);      // priced for display
+    expect(quoted.body.belowMinimum).toBe(true);
+    expect(ordered.status).toBe(422);     // refused for real
   });
 });
 

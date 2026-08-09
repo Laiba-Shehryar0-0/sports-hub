@@ -2,6 +2,18 @@ import { asyncHandler } from '../../utils/asyncHandler.js';
 import * as ordersService from './orders.service.js';
 import { idempotencyKeySchema } from './orders.schema.js';
 
+/**
+ * 200, not 201: this creates nothing. A 201 would imply a resource exists at some location, and
+ * the whole point of the quote is that nothing is persisted.
+ */
+export const quoteOrder = asyncHandler(async (req, res) => {
+  const quote = await ordersService.quoteCart({
+    items: req.body.items,
+    deliveryId: req.body.deliveryId,
+  });
+  res.json(quote);
+});
+
 export const createOrder = asyncHandler(async (req, res) => {
   // A malformed header is ignored rather than rejected: it only weakens double-submit
   // protection, and failing the order over it would be worse than the problem.

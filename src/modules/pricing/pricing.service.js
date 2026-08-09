@@ -117,7 +117,24 @@ export async function computePricing({ kitType, template, sport, totalKits, deli
  * one-item cart the two agree on unitPrice, kitPrice, deliveryPrice, discount and total; there is
  * a characterization test asserting exactly that against every kit type and delivery method.
  */
-export async function computeCartPricing({ items, deliveryId }) {
+/**
+ * `enforceMinimum` exists because MIN_TOTAL_KITS is an ORDER-ELIGIBILITY rule that lives in this
+ * pricing function, and one caller legitimately needs prices for a cart that is not yet orderable.
+ *
+ * /orders/quote prices a cart as the user builds it, so it must return figures for a 3-kit cart.
+ * Refusing would leave the cart page with no prices to display at exactly the moment someone is
+ * deciding whether to add more — and a page that cannot get prices from the server ends up
+ * multiplying unitPrice x quantity itself, which is the client-side pricing rule 2 exists to
+ * forbid. That is the argument, not the UX.
+ *
+ * Defaults to true, so the order path is unchanged and the floor stays real: POST /orders prices
+ * with the default and still rejects a sub-minimum cart. The quote creates nothing, so a price
+ * shown for an unorderable cart cannot become an unorderable order.
+ *
+ * MAX_TOTAL_KITS is NOT optional either way — it is a genuine bound on the arithmetic, not a
+ * business rule about what may be sold.
+ */
+export async function computeCartPricing({ items, deliveryId, enforceMinimum = true }) {
   if (!Array.isArray(items) || items.length === 0) {
     throw new AppError('Your cart is empty.', {
       statusCode: 422, code: 'PRICING_EMPTY_CART',
@@ -145,10 +162,23 @@ export async function computeCartPricing({ items, deliveryId }) {
   });
 
   const totalKits = items.reduce((sum, item) => sum + item.quantity, 0);
-  if (totalKits < MIN_TOTAL_KITS || totalKits > MAX_TOTAL_KITS) {
+
+  // The ceiling is unconditional — a bound on the arithmetic, not a rule about what may be sold.
+  // Checked separately from the floor so the two cannot share a message: with enforceMinimum they
+  // diverge, and a 501-kit cart being told about a 5-kit minimum would be its own small version of
+  // "right status, useless message".
+  if (totalKits > MAX_TOTAL_KITS) {
     throw new AppError(
-      `Order quantity must be between ${MIN_TOTAL_KITS} and ${MAX_TOTAL_KITS} kits in total.`,
-      { statusCode: 422, code: 'PRICING_INVALID_QUANTITY', details: { totalKits } },
+      `An order cannot exceed ${MAX_TOTAL_KITS} kits in total.`,
+      { statusCode: 422, code: 'PRICING_INVALID_QUANTITY', details: { totalKits, max: MAX_TOTAL_KITS } },
+    );
+  }
+
+  // The floor is order eligibility, so the quote can opt out of it to price a cart in progress.
+  if (enforceMinimum && totalKits < MIN_TOTAL_KITS) {
+    throw new AppError(
+      `An order must be at least ${MIN_TOTAL_KITS} kits in total.`,
+      { statusCode: 422, code: 'PRICING_INVALID_QUANTITY', details: { totalKits, min: MIN_TOTAL_KITS } },
     );
   }
 
