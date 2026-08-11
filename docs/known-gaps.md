@@ -160,7 +160,29 @@ state, not captured state. Three places now follow it — `designRef` in `Custom
 
 ---
 
-## 🟠 kit-frontend has no test runner, and it is now where the subtle bugs are
+## ✅ kit-frontend had no test runner — RESOLVED 2026-08-11 (`12d1164`)
+
+**The runner's first act was catching a bug that two rounds of careful reading had missed — and
+that reading had "fixed" wrongly.** That is this entry's own argument, proven on the day it landed,
+which is why the entry is kept rather than deleted.
+
+The bug: `CartContext`'s mutators read `itemsRef`, a ref assigned during render. On sign-in,
+`CartProvider`'s loader only *schedules* a render while `AuthProvider`'s replay runs later in the
+**same commit**, so the ref still held the logged-out `[]`. A gated Add to Cart therefore computed
+against an empty cart and persisted a single-item array **over the user's existing cart**. Data
+loss — strictly worse than the missing-line bug the ref was introduced to fix. The commit that
+shipped it (`0ffc744`) even stated the false reasoning explicitly: "the refs make the mutators see
+it". Fixed by reading storage at mutation time (`currentItems()`), which is ordering-independent.
+
+**What landed:** `vitest` + `jsdom` + `@testing-library/react` + `jest-dom` + `user-event`;
+`vitest.config.js` kept separate from `vite.config.js` so `vite build` imports no devDependency;
+`globalThis.fetch` stubbed to throw so no test can reach a real server; 91 tests across 6 files,
+including the four ported harnesses and three consequence-level gated-replay tests, each proven to
+fail against its own reverted fix.
+
+---
+
+*Original entry, kept for the record:*
 
 Every frontend bug found so far has been found by **reading**, not by testing. In the gated-replay
 path alone, three separate defects were caught that way — and all three are invisible at runtime,
@@ -199,7 +221,8 @@ And **vitest would delete the loader rather than need it**: it runs files throug
 asset imports and extensionless resolution all work natively. The loader is a stopgap whose only
 justification is that there is no runner yet.
 
-**DECIDED 2026-08-09 — adopt vitest AFTER Phase 3, BEFORE Phase 4.** Not now and not Phase 5.
+**DECIDED 2026-08-09, DONE 2026-08-11 — adopt vitest AFTER Phase 3, BEFORE Phase 4.** The timing
+held: Phase 4 rewrites `Checkout.jsx` and will now land with coverage rather than without.
 
 It is test infrastructure rather than a cart feature, so it should not stall the last step of
 Phase 3. But **Phase 4 rewrites `Checkout.jsx`** — the one file where a mistake charges someone
