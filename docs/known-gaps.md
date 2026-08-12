@@ -376,13 +376,57 @@ each limiter a distinct `prefix` at that point.
 once vitest landed.)*
 
 `vitest.config.js` pins `NODE_ENV=test` so the suite can only reach `kitworld_test`, and
-`assets.service` refuses to write outside a temp directory there. 144 tests pass across `pricing`,
+`assets.service` refuses to write outside a temp directory there. 204 tests pass across `pricing`,
 `orders` and `assets`.
 
 Still uncovered: `catalog` and `auth` have no suites of their own — both are exercised only
 incidentally through `orders` fixtures. Nothing fetches a stored logo over HTTP, so the
 `/static/logos` mount order is unverified by any committed test (it was proven by an ad-hoc probe;
 a round-trip assertion belongs with `POST /api/assets`).
+
+---
+
+## 🟡 The suite intermittently aborts before running a single test
+
+**Seen twice on 2026-08-12, not reproduced in 33 runs since. Not fixed — unexplained.**
+
+Two consecutive `npm test` runs ended with all three suites failing to load and zero tests
+executed:
+
+```
+FAIL  src/modules/assets/assets.test.js   Error: Vitest failed to find the runner.
+FAIL  src/modules/orders/orders.test.js   Error: Vitest failed to find the runner.
+FAIL  src/modules/pricing/pricing.test.js TypeError: Cannot read properties of undefined (reading 'config')
+
+Test Files  3 failed (3)
+     Tests  no tests
+```
+
+Both signatures are one fault: the test file was executed outside a vitest worker context, so the
+runner lookup — and `describe` itself — found nothing. It hit `assets.test.js`, which nothing that
+day had touched, so it is not about any one module's code.
+
+**What was ruled out.** 33 runs, all green, on vitest 4.1.10 / Node v22.20.0 / Windows 10:
+
+| Hypothesis | How it was tested | Result |
+|---|---|---|
+| Stale `node --watch` dev server on :4000 | 12 runs with it up — it had been running since 2026-08-09, and was up for the two failures | 12/12 pass |
+| The watcher restarting the server mid-run | 12 runs, each preceded by touching a file the server imports | 12/12 pass |
+| A concurrent frontend vitest run — both failures were near one | 6 rounds launching both suites simultaneously | 6/6 pass |
+| Cold Vite deps cache, which is CI's permanent state | 3 runs after `rm -rf node_modules/.vite` | 3/3 pass |
+
+`fileParallelism: false` was verified to be holding rather than assumed: the JSON reporter's
+per-file timestamps show the three files running strictly sequentially with gaps between them. So
+this is not suites interfering with each other.
+
+**Why it is logged rather than dismissed.** Vitest exits non-zero here, so CI goes red rather than
+falsely green — but the failure mode is "the suite did not run", which is the one result a test
+suite must never produce quietly. A flaky red reading `Tests no tests` also looks nothing like a
+real assertion failure, so it invites being retried away rather than read.
+
+**If it recurs:** keep the full output and the exit code — this entry was written from a scrollback
+that had already lost the exit code. Then try `--pool=threads` against the default, and note what
+else was running on the machine; both sightings were on a box also hosting two dev servers.
 
 ---
 
