@@ -63,9 +63,12 @@ export async function computePricing({ kitType, template, sport, totalKits, deli
     pricingRepository.findDeliveryMethod(deliveryId),
   ]);
 
-  // Deliberately NOT the frontend's `BASE_PRICES[kitType] ?? 2800` / `?? DELIVERY_METHODS[0]`
-  // fallbacks. Silently pricing an unknown kitType as a jersey, or an unknown deliveryId as free
-  // standard shipping, is exactly how a tampered payload gets underpriced.
+  // Deliberately NOT the fallbacks the checkout page used to price with. Until 2026-08-12 the
+  // frontend computed its own total from `BASE_PRICES[kitType] ?? 2800` and
+  // `DELIVERY_METHODS.find(...) ?? DELIVERY_METHODS[0]`; BASE_PRICES has since been deleted and
+  // the frontend delivery table is kept for names and ETAs only. Silently pricing an unknown
+  // kitType as a jersey, or an unknown deliveryId as free standard shipping, is how a tampered
+  // payload gets underpriced, so both are a 422 here regardless of what the client does.
   if (!kit) {
     throw new AppError('That kit type is not available.', {
       statusCode: 422, code: 'PRICING_UNKNOWN_KIT_TYPE', details: { kitType },

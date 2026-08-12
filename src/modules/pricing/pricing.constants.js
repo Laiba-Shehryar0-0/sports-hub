@@ -6,8 +6,10 @@
  * static id->label lookups mirroring DESIGN_TEMPLATES and SPORTS in the frontend's kitShapes.js.
  *
  * Neither map participates in the arithmetic. `template` in particular does NOT affect price at
- * all: BASE_PRICES is keyed by kitType alone (docs/EXTRACTED.md), so it is carried purely so the
- * order summary can render "Football Solid Jersey".
+ * all: `kit_prices` is keyed by kit_type alone, so template is carried purely so the order summary
+ * can render "Football Solid Jersey". (The frontend's BASE_PRICES was keyed the same way — that is
+ * what docs/EXTRACTED.md records — but it was deleted on 2026-08-12 and prices now come from the
+ * server alone.)
  *
  * If these drift from the frontend the price stays correct and only the label is wrong, which is
  * why an unknown id falls back to the raw id rather than throwing.

@@ -1,4 +1,4 @@
-// Snapshot of ../kit-frontend as of 2026-08-04 — reference only, do not edit here.
+// Snapshot of ../kit-frontend as of 2026-08-12 — reference only, do not edit here.
 // Source: src/customize/kitShapes.js
 
 /**
@@ -108,15 +108,17 @@ export const POSITIONS = [
   { id: 'BR', label: '↘', row: 2, col: 2, x: 0.72, y: 0.80 },
 ];
 
-/** Base unit price (PKR) per kit type — used on the checkout page */
-export const BASE_PRICES = {
-  jersey: 2800,
-  polo:   2600,
-  jumper: 3200,
-  shorts: 1500,
-  socks:  600,
-  cap:    1200,
-};
+/**
+ * BASE_PRICES was here. DO NOT REINTRODUCE IT.
+ *
+ * It was a second unit-price table living beside `kit_prices` in the database, agreeing with it
+ * by maintenance rather than by mechanism — the drift class that once left the sport enum with
+ * three values on one side and five on the other. Checkout read it as
+ * `BASE_PRICES[design.kitType] ?? 2800`, so an unknown kit type was silently priced as a jersey.
+ *
+ * Prices now come from POST /api/orders/quote, which reads kit_prices. If you need a unit price
+ * in the browser, ask the server for one — do not add a table here.
+ */
 
 export const DELIVERY_METHODS = [
   { id: 'standard',      name: 'Standard Delivery',      price: 0,    priceLabel: 'Free',       days: '10–14 business days', desc: 'Nationwide courier' },

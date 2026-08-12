@@ -103,6 +103,13 @@ nest further).
 
 ## `BASE_PRICES` — unit price per kitType (line 104-111)
 
+> **No longer exists in the source — deleted from `kitShapes.js` on 2026-08-12.** Checkout stopped
+> computing its own money that day: unit prices come from `kit_prices` and delivery prices from
+> `deliveryOptions` on `POST /orders/quote`. This table, and the checkout arithmetic quoted under
+> "Checkout — `Checkout.jsx`" further down, are kept as the dated record of what the frontend used
+> to do and where these figures were seeded from. Do not read either as live frontend code —
+> `kit_prices` and `delivery_methods` are the authority on the numbers now.
+
 | kitType | unit price (PKR) |
 |---|---|
 | jersey | 2800 |

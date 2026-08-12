@@ -1,7 +1,8 @@
-// Snapshot of ../kit-frontend as of 2026-08-05 — reference only, do not edit here.
+// Snapshot of ../kit-frontend as of 2026-08-12 — reference only, do not edit here.
 // Source: src/pages/Checkout.jsx
 
 import { useState, useCallback, useEffect, useRef } from 'react';
+import { useCart } from '../context/CartContext';
 import { Link, useNavigate } from 'react-router-dom';
 import KitPreview from '../customize/KitPreview';
 import { required, validateFields } from '../utils/validation';
@@ -10,12 +11,13 @@ import {
   SHIPPING_COUNTRIES, DOMESTIC_COUNTRY, allowedDeliveryIds, isDeliveryAllowedForCountry,
 } from '../data/countries';
 import {
-  KIT_TYPES, SPORTS, SIZES, DESIGN_TEMPLATES, BASE_PRICES,
-  DELIVERY_METHODS, QUANTITY_PRESETS, PAYMENT_METHODS, loadStoredDesign, loadEditedKitImage,
+  // DELIVERY_METHODS is imported for NAMES, ETAs and descriptions only. Its `price` field is no
+  // longer read here — delivery money comes from the quote, like every other figure.
+  KIT_TYPES, DELIVERY_METHODS, PAYMENT_METHODS,
 } from '../customize/kitShapes';
 import {
   IconChevronLeft, IconLock, IconTruck, IconCard, IconBank, IconCash,
-  IconShield, IconCheck, IconMinus, IconPlus,
+  IconShield, IconCheck,
 } from '../customize/icons';
 
 const inputCls = 'bg-surface-600 border border-line text-onsurface-100 py-[10px] px-4 text-[0.9rem] outline-none w-full rounded-sm transition-[border-color_150ms_ease] focus:border-gold placeholder:text-onsurface-700';
@@ -27,59 +29,90 @@ const STEPS = [
   { id: 3, label: 'Delivered', status: 'Est. 7–14 days' },
 ];
 
-const PROMO_CODES = { SAVE10: 0.1, HUB15: 0.15 };
 
 function formatPKR(n) {
   return `PKR ${Math.round(n).toLocaleString('en-US')}`;
 }
 
 export default function Checkout() {
-  const [design] = useState(loadStoredDesign);
-  const [editedKit] = useState(() => loadEditedKitImage('front', design.kitType));
   const navigate = useNavigate();
 
-  const [totalKits, setTotalKits] = useState(11);
-  const [primarySize, setPrimarySize] = useState(design.size || 'M');
+  /**
+   * Everything priced comes from the CART and the SERVER'S QUOTE.
+   *
+   * This page used to compute its own totals from BASE_PRICES and a frontend DELIVERY_METHODS
+   * copy — two hardcoded tables agreeing with kit_prices/delivery_methods by maintenance rather
+   * than by mechanism, complete with a `?? 2800` fallback that priced an unknown kit type as a
+   * jersey. That is exactly what /orders/quote exists to replace.
+   */
+  const {
+    items, quote, quoteStatus, quoteIsStale, refreshQuote,
+    deliveryId, setDeliveryId, clear: clearCart,
+  } = useCart();
+
   const [instructions, setInstructions] = useState('');
 
   const [contact, setContact] = useState({ firstName: '', lastName: '', email: '', phone: '', clubName: '' });
   const [address, setAddress] = useState({ street: '', city: '', province: '', postalCode: '', country: 'Pakistan' });
 
-  const [deliveryId, setDeliveryId] = useState('express');
   const [paymentId, setPaymentId] = useState('card');
   const [card, setCard] = useState({ number: '', expiry: '', cvv: '', name: '' });
 
-  const [promoCode, setPromoCode] = useState('');
-  const [promoApplied, setPromoApplied] = useState(null);
-  const [promoError, setPromoError] = useState('');
-
   const [errors, setErrors] = useState({});
-  const [placed, setPlaced] = useState(false);
+  /** null until an order is placed, then the SERVER's response — reference, id and pricing. */
+  const [confirmation, setConfirmation] = useState(null);
+  /** Set when the API was unreachable: nothing was sent, so this is not a confirmation. */
+  const [offline, setOffline] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  /** Set when the cart changes underneath us — another tab. Warn, never navigate away. */
+  const [cartChangedElsewhere, setCartChangedElsewhere] = useState(false);
   // One key per checkout ATTEMPT, not per request. A double-click, or a retry after a submit
   // that timed out but actually succeeded, must reuse this or the server creates two orders.
   // useRef so regenerating it never triggers a render.
   const idempotencyKeyRef = useRef(crypto.randomUUID());
   const [submitError, setSubmitError] = useState('');
 
+  /**
+   * Quote on mount and whenever the delivery method changes — the only checkout input that moves
+   * the price. Contact and address do not, except via the country/delivery coupling, which changes
+   * deliveryId anyway. No debounce: these are discrete selections, not typing.
+   */
   useEffect(() => {
-    if (!placed) return;
-    const t = setTimeout(() => setPlaced(false), 3200);
-    return () => clearTimeout(t);
-  }, [placed]);
+    if (items.length === 0) return;
+    refreshQuote();
+  }, [refreshQuote, items.length]);
 
-  const kitLabel = KIT_TYPES.find(k => k.id === design.kitType)?.label || 'Jersey';
-  const templateName = DESIGN_TEMPLATES.find(t => t.id === design.template)?.name || 'Solid';
-  const sportLabel = SPORTS.find(s => s.id === design.sport)?.label || 'Football';
-  const sizeDisplay = design.size === 'Custom' && design.customSize
-    ? `${design.customSize} ${design.customSizeUnit || 'in'}`
-    : design.size;
-  const unitPrice = BASE_PRICES[design.kitType] ?? 2800;
+  /**
+   * Another tab emptied or changed the cart. WARN, DO NOT NAVIGATE — this page holds an address
+   * the user has typed, and losing it to a background change is worse than the inconsistency.
+   */
+  useEffect(() => {
+    const onStorage = (e) => {
+      if (e.key && e.key.startsWith('kitlab_cart:')) setCartChangedElsewhere(true);
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, []);
+
+  // Presentation only — names, ETAs and descriptions. The PRICE comes from the quote.
   const delivery = DELIVERY_METHODS.find(d => d.id === deliveryId) ?? DELIVERY_METHODS[0];
 
-  const kitPrice = unitPrice * totalKits;
-  const discount = promoApplied ? Math.round(kitPrice * promoApplied) : 0;
-  const total = kitPrice + delivery.price - discount;
+  /**
+   * Money is stale together or not at all: any change invalidates every figure, since delivery and
+   * subtotal are computed across all lines. Same rule as the cart page.
+   */
+  const pricesPending = quoteIsStale || quoteStatus === 'loading';
+  const priced = quoteStatus === 'ok' && !quoteIsStale ? quote : null;
+
+  /**
+   * Delivery prices for the SELECTOR, which shows every method so the user can compare — a quote
+   * prices only the selected one. Served by the quote's deliveryOptions so the frontend keeps no
+   * price table of its own; null until it arrives, rendered as a dash rather than a guess.
+   */
+  const deliveryPriceOf = (id) => {
+    const option = quote?.deliveryOptions?.find((o) => o.id === id);
+    return option ? option.price : null;
+  };
 
   const setField = (setter) => (key, value) => setter(prev => ({ ...prev, [key]: value }));
   const setContactField = setField(setContact);
@@ -95,17 +128,6 @@ export default function Checkout() {
     setAddress(prev => ({ ...prev, country }));
     setDeliveryId(prev => (isDeliveryAllowedForCountry(country, prev) ? prev : allowedDeliveryIds(country)[0]));
   }, []);
-
-  const applyPromo = useCallback(() => {
-    const code = promoCode.trim().toUpperCase();
-    if (PROMO_CODES[code]) {
-      setPromoApplied(PROMO_CODES[code]);
-      setPromoError('');
-    } else {
-      setPromoApplied(null);
-      setPromoError('Invalid or expired code');
-    }
-  }, [promoCode]);
 
   const handlePlaceOrder = useCallback(async () => {
     const values = {
@@ -133,26 +155,38 @@ export default function Checkout() {
     }
     setSubmitting(true);
     setSubmitError('');
+    setOffline(false);
     try {
-      await placeOrder({
-        design, contact, address, deliveryId, paymentId,
-        totalKits, primarySize, instructions,
-        pricing: {
-          kitLabel, templateName, sportLabel, unitPrice, kitPrice,
-          deliveryName: delivery.name, deliveryPrice: delivery.price,
-          discount, promoApplied, total,
-        },
+      const response = await placeOrder({
+        items: items.map(i => ({ design: i.design, size: i.size, quantity: i.quantity })),
+        contact, address, deliveryId, paymentId, instructions,
+        // Sent for the server's price_mismatch comparison and then DISCARDED (rule 2). Never read
+        // back — the confirmation below renders what the SERVER returned.
+        pricing: priced ?? undefined,
       }, idempotencyKeyRef.current);
+
+      /**
+       * The offline branch of placeOrder fabricates { simulated: true } so a demo works with the
+       * API down. NOTHING WAS SENT, so this is not an order and must not be shown as one — a
+       * confirmation with no reference would claim something that did not happen, which is a
+       * bigger lie than a blank total. The key is deliberately NOT rotated, so a retry reuses it
+       * and cannot create a second order.
+       */
+      if (response?.simulated) {
+        setOffline(true);
+        return;
+      }
+
       // Succeeded — any further order placed from this screen is genuinely a new one.
       idempotencyKeyRef.current = crypto.randomUUID();
-      setPlaced(true);
+      setConfirmation(response);
+      clearCart();
     } catch (err) {
       setSubmitError(err.message || 'Could not place your order. Please try again.');
     } finally {
       setSubmitting(false);
     }
-  }, [design, contact, address, paymentId, card, deliveryId, totalKits, primarySize, instructions,
-      kitLabel, templateName, sportLabel, unitPrice, kitPrice, delivery, discount, promoApplied, total]);
+  }, [items, contact, address, paymentId, card, deliveryId, instructions, priced, clearCart]);
 
   return (
     <div className="min-h-[calc(100vh-72px)] mt-[72px] bg-surface-800 pb-16">
@@ -167,77 +201,43 @@ export default function Checkout() {
 
       <div className="grid grid-cols-[1fr_360px] gap-6 max-w-[1180px] mx-auto px-6 items-start max-[980px]:grid-cols-1">
         <main className="flex flex-col gap-5 min-w-0">
-          <Card step={1} title="Kit Summary">
-            <div className="flex gap-5 max-[640px]:flex-col">
-              <div className="w-[110px] h-[110px] flex-shrink-0 bg-[linear-gradient(160deg,var(--color-canvas-light)_0%,var(--color-canvas-light-dark)_100%)] rounded-md p-2">
-                {editedKit ? (
-                  <img src={editedKit} alt="Your edited kit" className="w-full h-full object-contain rounded-sm" />
-                ) : (
-                  <KitPreview
-                    kitType={design.kitType} bodyColor={design.bodyColor} sleeveColor={design.sleeveColor}
-                    numberColor={design.numberColor} collarColor={design.collarColor} opacity={design.opacity}
-                    template={design.template} playerName={design.playerName} playerNumber={design.playerNumber}
-                    font={design.font} nameSize={design.nameSize} numberSize={design.numberSize}
-                    textPosition={design.textPosition} numberPosition={design.numberPosition} logoDataUrl={design.logoDataUrl} logoPreset={design.logoPreset}
-                    logoScale={design.logoScale} logoOpacity={design.logoOpacity} logoPosition={design.logoPosition}
-                    side="front" layers={design.layers}
-                  />
-                )}
-              </div>
-              <div className="flex-1 flex flex-col gap-[9px]">
-                <FactRow label="Kit Type" value={`${sportLabel} ${kitLabel}`} />
-                <FactRow label="Size" value={sizeDisplay} />
-                <FactRow label="Template" value={templateName} />
-                <FactRow label="Name / No." value={`${design.playerName.front || design.playerName.back || 'PLAYER'} / #${design.playerNumber.front || design.playerNumber.back || '—'}`} />
-                <FactRow label="Colors" value={
-                  <span className="flex gap-[6px]">
-                    <i className="w-[14px] h-[14px] rounded-full inline-block border border-[rgba(255,255,255,0.2)]" style={{ background: design.bodyColor }} />
-                    <i className="w-[14px] h-[14px] rounded-full inline-block border border-[rgba(255,255,255,0.2)]" style={{ background: design.sleeveColor }} />
-                  </span>
-                } />
-                <FactRow label="Unit Price" value={formatPKR(unitPrice)} />
-                <Link to="/customize" className="self-start mt-1 text-gold text-[12px] font-bold underline">Edit in Studio</Link>
-              </div>
-            </div>
-          </Card>
+          <Card step={1} title={`Your Cart (${items.length} design${items.length === 1 ? '' : 's'})`}>
+            <ul className="flex flex-col gap-3 list-none p-0 m-0">
+              {items.map((item, index) => {
+                const line = priced?.items?.[index];
+                return (
+                  <li key={item.id} className="flex gap-4 items-start">
+                    <div className="w-[72px] h-[72px] flex-shrink-0 bg-[linear-gradient(160deg,var(--color-canvas-light)_0%,var(--color-canvas-light-dark)_100%)] rounded-md p-1.5">
+                      <KitPreview
+                        kitType={item.design.kitType} bodyColor={item.design.bodyColor} sleeveColor={item.design.sleeveColor}
+                        numberColor={item.design.numberColor} collarColor={item.design.collarColor} opacity={item.design.opacity}
+                        template={item.design.template} playerName={item.design.playerName} playerNumber={item.design.playerNumber}
+                        font={item.design.font} nameSize={item.design.nameSize} numberSize={item.design.numberSize}
+                        textPosition={item.design.textPosition} numberPosition={item.design.numberPosition}
+                        logoDataUrl={item.design.logoDataUrl} logoPreset={item.design.logoPreset}
+                        logoScale={item.design.logoScale} logoOpacity={item.design.logoOpacity} logoPosition={item.design.logoPosition}
+                        side="front" layers={item.design.layers}
+                      />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <strong className="block text-[13px]">{item.design.kitProduct || KIT_TYPES.find(k => k.id === item.design.kitType)?.label || 'Kit'}</strong>
+                      <span className="text-[11px] text-onsurface-500">Size {item.size} · x{item.quantity}</span>
+                    </div>
+                    {/* Line money is quote-derived, so it dims with everything else. */}
+                    <span className={`text-[13px] font-semibold ${pricesPending ? 'opacity-40' : ''}`}>
+                      {line ? formatPKR(line.lineTotal) : '—'}
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+            <Link to="/cart" className="self-start mt-1 text-gold text-[12px] font-bold underline">Edit cart</Link>
 
-          <Card step={2} title="Quantity & Sizes">
-            <div className="flex gap-6 flex-wrap">
-              <div className="flex flex-col gap-[6px]">
-                <label className={fieldLabelCls}>Total Kits *</label>
-                <div className="flex items-center gap-3 bg-surface-600 border border-line rounded-sm py-[6px] px-[10px] w-fit">
-                  <button className="flex items-center justify-center w-[26px] h-[26px] rounded-full border-none bg-surface-500 text-onsurface-100 cursor-pointer transition-[background_150ms_ease] hover:bg-gold hover:text-bg-800" onClick={() => setTotalKits(q => Math.max(5, q - 1))} aria-label="Decrease"><IconMinus /></button>
-                  <span className="min-w-[26px] text-center font-bold text-[15px]">{totalKits}</span>
-                  <button className="flex items-center justify-center w-[26px] h-[26px] rounded-full border-none bg-surface-500 text-onsurface-100 cursor-pointer transition-[background_150ms_ease] hover:bg-gold hover:text-bg-800" onClick={() => setTotalKits(q => q + 1)} aria-label="Increase"><IconPlus /></button>
-                </div>
-              </div>
-              <div className="flex flex-col gap-[6px]">
-                <label className={fieldLabelCls}>Primary Size *</label>
-                <select value={primarySize} onChange={e => setPrimarySize(e.target.value)} className={inputCls}>
-                  {SIZES.map(s => <option key={s} value={s}>{s}</option>)}
-                </select>
-              </div>
-            </div>
-            {primarySize === 'Custom' && (
-              <p className="text-[11.5px] text-onsurface-600 leading-[1.6]">Custom size: <strong>{sizeDisplay}</strong> (as entered in the Studio)</p>
-            )}
-            <p className="text-[11.5px] text-onsurface-600 leading-[1.6]">For mixed sizes, note individual sizes in special instructions. Minimum order: 5 kits.</p>
-            <div className="flex gap-2 flex-wrap">
-              {QUANTITY_PRESETS.map(p => (
-                <button
-                  key={p.label}
-                  onClick={() => setTotalKits(p.value)}
-                  className={`py-[7px] px-[14px] border-[1.5px] text-[11px] font-bold rounded-full transition-[all_180ms_ease] ${totalKits === p.value ? 'bg-gold border-gold text-bg-800' : 'bg-surface-600 border-line text-onsurface-500 hover:border-onsurface-400 hover:text-onsurface-100'}`}
-                >
-                  {p.label}
-                </button>
-              ))}
-            </div>
-            <div className="flex flex-col gap-[6px]">
+            <div className="flex flex-col gap-[6px] mt-2">
               <label className={fieldLabelCls}>Special Instructions (optional)</label>
               <textarea
                 className={`${inputCls} resize-y [font-family:inherit]`} rows={3}
-                placeholder="e.g. 3×S, 5×M, 2×L, 1×XL or any customisation notes..."
+                placeholder="Any customisation notes..."
                 value={instructions} onChange={e => setInstructions(e.target.value)}
               />
             </div>
@@ -300,7 +300,15 @@ export default function Checkout() {
                       </span>
                       <span className="text-[11.5px] text-onsurface-600">{m.days} · {m.desc}</span>
                     </span>
-                    <span className="text-[13px] font-extrabold text-onsurface-100 whitespace-nowrap">{m.priceLabel}</span>
+                    {/* The SERVER's price for this method, from the quote's deliveryOptions — not
+                        the hardcoded priceLabel that used to sit here. That string could disagree
+                        with the total directly below it, which is the whole failure this phase
+                        removed. Dashes until the quote arrives rather than a stale number. */}
+                    <span className={`text-[13px] font-extrabold text-onsurface-100 whitespace-nowrap ${pricesPending ? 'opacity-40' : ''}`}>
+                      {deliveryPriceOf(m.id) === null
+                        ? '—'
+                        : deliveryPriceOf(m.id) === 0 ? 'Free' : formatPKR(deliveryPriceOf(m.id))}
+                    </span>
                   </button>
                 );
               })}
@@ -347,51 +355,26 @@ export default function Checkout() {
           <div className="bg-surface-700 border border-line rounded-lg p-6 flex flex-col gap-5">
             <h3 className="font-body font-bold text-[1.15rem] tracking-[0.4px] text-onsurface-100">Order Summary</h3>
 
-            <div className="flex gap-3">
-              <div className="w-14 h-14 flex-shrink-0 bg-[linear-gradient(160deg,var(--color-canvas-light)_0%,var(--color-canvas-light-dark)_100%)] rounded-sm p-1">
-                {editedKit ? (
-                  <img src={editedKit} alt="Your edited kit" className="w-full h-full object-contain rounded-sm" />
-                ) : (
-                  <KitPreview
-                    kitType={design.kitType} bodyColor={design.bodyColor} sleeveColor={design.sleeveColor}
-                    numberColor={design.numberColor} collarColor={design.collarColor} opacity={design.opacity}
-                    template={design.template} playerName={design.playerName} playerNumber={design.playerNumber}
-                    font={design.font} nameSize={design.nameSize} numberSize={design.numberSize}
-                    textPosition={design.textPosition} numberPosition={design.numberPosition} logoDataUrl={design.logoDataUrl} logoPreset={design.logoPreset}
-                    logoScale={design.logoScale} logoOpacity={design.logoOpacity} logoPosition={design.logoPosition}
-                    side="front" layers={design.layers}
-                  />
-                )}
-              </div>
-              <div className="flex flex-col gap-[3px] text-[11.5px] text-onsurface-600 min-w-0">
-                <strong className="text-[13px] text-onsurface-100 font-bold">{sportLabel} {kitLabel} Custom</strong>
-                <span>{templateName} Template</span>
-                <span>#{design.playerNumber.front || design.playerNumber.back || '—'} {(design.playerName.front || design.playerName.back || 'PLAYER').toUpperCase()} · Size: {sizeDisplay} · Qty: {totalKits}</span>
-              </div>
-            </div>
+            <p className="text-[11.5px] text-onsurface-600">
+              {items.length} design{items.length === 1 ? '' : 's'} · {priced ? `${priced.totalKits} kits` : '—'}
+            </p>
 
-            <div className="flex flex-col gap-2 pt-4 border-t border-line">
-              <div className="flex justify-between text-[12.5px] text-onsurface-500"><span>Kit price (×{totalKits})</span><span className="text-onsurface-200 font-semibold">{formatPKR(kitPrice)}</span></div>
-              <div className="flex justify-between text-[12.5px] text-onsurface-500"><span>{delivery.name}</span><span className="text-onsurface-200 font-semibold">{delivery.price === 0 ? 'Free' : formatPKR(delivery.price)}</span></div>
+            {/* Every figure below is quote-derived, so they dim TOGETHER. Dimming one while another
+                looked authoritative would show a line disagreeing with the total. */}
+            <div className={`flex flex-col gap-2 pt-4 border-t border-line ${pricesPending ? 'opacity-40' : ''}`}>
+              <div className="flex justify-between text-[12.5px] text-onsurface-500"><span>Subtotal</span><span className="text-onsurface-200 font-semibold">{priced ? formatPKR(priced.kitPrice) : '—'}</span></div>
+              <div className="flex justify-between text-[12.5px] text-onsurface-500"><span>{delivery.name}</span><span className="text-onsurface-200 font-semibold">{priced ? (priced.deliveryPrice === 0 ? 'Free' : formatPKR(priced.deliveryPrice)) : '—'}</span></div>
               <div className="flex justify-between text-[12.5px] text-onsurface-500"><span>Design fee</span><span className="text-gold font-bold">FREE</span></div>
-              {promoApplied && <div className="flex justify-between text-[12.5px] text-onsurface-500"><span>Promo discount</span><span className="text-success font-bold">-{formatPKR(discount)}</span></div>}
             </div>
 
-            <div className="flex items-center justify-between pt-4 border-t border-line text-[13px] text-onsurface-300 font-bold uppercase tracking-[1px]">
+            <div className={`flex items-center justify-between pt-4 border-t border-line text-[13px] text-onsurface-300 font-bold uppercase tracking-[1px] ${pricesPending ? 'opacity-40' : ''}`}>
               <span>Total</span>
-              <strong className="font-body font-bold text-[1.65rem] text-gold tracking-[0.2px]">{formatPKR(total)}</strong>
+              <strong className="font-body font-bold text-[1.65rem] text-gold tracking-[0.2px]">{priced ? formatPKR(priced.total) : '—'}</strong>
             </div>
 
-            <div className="flex gap-2">
-              <input
-                type="text" placeholder="Promo code" value={promoCode}
-                onChange={e => { setPromoCode(e.target.value); setPromoError(''); }}
-                className="flex-1 bg-surface-600 border border-line text-onsurface-100 py-[9px] px-3 rounded-sm text-[12.5px] outline-none focus:border-gold"
-              />
-              <button onClick={applyPromo} className="btn btn-outline py-[9px] px-[18px] text-[11px]">Apply</button>
-            </div>
-            {promoError && <p className="text-[11px] text-red-light mt-[-8px]">{promoError}</p>}
-            {promoApplied && <p className="text-[11px] text-success mt-[-8px] flex items-center gap-[5px] [&>svg]:w-3 [&>svg]:h-3"><IconCheck /> Code applied — {Math.round(promoApplied * 100)}% off</p>}
+            {pricesPending && (
+              <p className="text-[11px] font-semibold tracking-[1px] uppercase text-onsurface-500 text-center">Updating prices…</p>
+            )}
 
             <ul className="flex flex-col gap-2 pt-3 border-t border-line">
               <li className="flex items-center gap-2 text-[11.5px] text-onsurface-500 [&>svg]:w-[14px] [&>svg]:h-[14px] [&>svg]:text-gold [&>svg]:flex-shrink-0"><IconShield /> Quality guarantee on all kits</li>
@@ -400,8 +383,17 @@ export default function Checkout() {
               <li className="flex items-center gap-2 text-[11.5px] text-onsurface-500 [&>svg]:w-[14px] [&>svg]:h-[14px] [&>svg]:text-gold [&>svg]:flex-shrink-0"><IconLock /> Secure encrypted payments</li>
             </ul>
 
-            <button onClick={handlePlaceOrder} className="btn btn-darkred w-full p-[15px] text-[13px]" disabled={submitting}>
-              {submitting ? 'Placing Order…' : 'Place Order'}
+            {/* Disabled while the price is stale or in flight. The figure on screen at click time
+                is therefore always the most recent SERVER-computed one — never a client
+                calculation, and never one the client already knows is out of date. It is still
+                not a guarantee of what is charged: the server recomputes inside the order
+                transaction, so the confirmation below shows what it actually returned. */}
+            <button
+              onClick={handlePlaceOrder}
+              className="btn btn-darkred w-full p-[15px] text-[13px] disabled:opacity-40 disabled:cursor-not-allowed"
+              disabled={submitting || pricesPending || !priced}
+            >
+              {submitting ? 'Placing Order…' : pricesPending ? 'Updating prices…' : 'Place Order'}
             </button>
             {submitError && <p className="text-[11px] text-danger text-center" role="alert">{submitError}</p>}
             <p className="text-[10.5px] text-onsurface-700 text-center leading-[1.6]">
@@ -411,9 +403,41 @@ export default function Checkout() {
         </aside>
       </div>
 
-      {placed && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 flex items-center gap-2 bg-gold text-bg-800 font-bold text-[13px] py-[14px] px-[26px] rounded-full shadow-[0_4px_24px_rgba(245,166,35,0.4)] z-[100] animate-[checkoutToastPop_220ms_ease] [&>svg]:w-4 [&>svg]:h-4">
-          <IconCheck /> Order placed! Confirmation sent to {contact.email || 'your email'}.
+      {/* THE SERVER'S FIGURES, not the local quote. If a price moved between the last quote and
+          the POST, this is where the real number appears — at the only moment it matters. */}
+      {confirmation && (
+        <div role="status" className="fixed inset-x-0 bottom-6 mx-auto w-fit max-w-[min(560px,calc(100vw-2rem))] flex flex-col gap-1 bg-gold text-bg-800 font-bold text-[13px] py-4 px-7 rounded-xl shadow-[0_4px_24px_rgba(245,166,35,0.4)] z-[100]">
+          <span className="flex items-center gap-2 [&>svg]:w-4 [&>svg]:h-4">
+            <IconCheck /> Order {confirmation.reference} placed — {formatPKR(confirmation.pricing.total)} charged.
+          </span>
+          <span className="font-semibold opacity-80">
+            Confirmation sent to {contact.email || 'your email'}.
+          </span>
+        </div>
+      )}
+
+      {/* NOT a confirmation. placeOrder fabricates { simulated: true } when the API is unreachable,
+          so nothing was sent: there is no reference and no server pricing. Showing an "order
+          placed" message here would claim something that did not happen. */}
+      {offline && (
+        <div role="alert" className="fixed inset-x-0 bottom-6 mx-auto w-fit max-w-[min(560px,calc(100vw-2rem))] flex flex-col gap-2 bg-[#5a1220] text-white border border-[#8d1f33] text-[13px] py-4 px-6 rounded-xl z-[100]">
+          <strong>Your order has not been sent.</strong>
+          <span className="font-semibold opacity-90">
+            We couldn’t reach the server{priced ? ` — the estimated total was ${formatPKR(priced.total)}` : ''}. Your cart is untouched; try again when you’re back online.
+          </span>
+          <button type="button" onClick={handlePlaceOrder} className="self-start btn btn-grey py-2 px-4 text-[11px] font-bold tracking-[1px] uppercase">
+            Try again
+          </button>
+        </div>
+      )}
+
+      {/* Another tab changed the cart. Warn only — navigating away would destroy a typed address. */}
+      {cartChangedElsewhere && !confirmation && (
+        <div role="alert" className="fixed inset-x-0 top-[84px] mx-auto w-fit max-w-[min(560px,calc(100vw-2rem))] flex items-center gap-3 bg-surface-600 border border-line-strong text-onsurface-100 text-[12px] font-semibold py-3 px-5 rounded-xl z-[100]">
+          <span>Your cart changed in another tab.</span>
+          <button type="button" onClick={() => window.location.reload()} className="btn btn-grey py-1.5 px-3 text-[11px] font-bold tracking-[1px] uppercase">
+            Refresh
+          </button>
         </div>
       )}
     </div>
