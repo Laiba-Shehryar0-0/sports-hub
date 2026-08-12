@@ -80,6 +80,23 @@ export async function findKitPricesByTypes(kitTypes, db = pool) {
   return new Map(rows.map((row) => [row.kit_type, row]));
 }
 
+/**
+ * Every active delivery method, for the checkout selector.
+ *
+ * The selector shows all methods so the user can compare before choosing, while a quote prices
+ * only the one selected — so without this the frontend would need its own price table beside the
+ * server's, which is precisely the drift BASE_PRICES was deleted to end.
+ *
+ * No index needed or wanted: this is an unfiltered read of a four-row lookup table. ORDER BY price
+ * so the list is cheapest-first and stable, rather than depending on insertion order.
+ */
+export async function findActiveDeliveryMethods(db = pool) {
+  const [rows] = await db.execute(
+    `SELECT ${DELIVERY_COLUMNS} FROM delivery_methods WHERE is_active = 1 ORDER BY price`,
+  );
+  return rows;
+}
+
 /** Index: PRIMARY (id) — delivery_methods keys on the natural id ('standard', 'express', ...). */
 export async function findDeliveryMethod(deliveryId, db = pool) {
   const [rows] = await db.execute(

@@ -1,5 +1,5 @@
 import * as ordersRepository from './orders.repository.js';
-import { computeCartPricing } from '../pricing/pricing.service.js';
+import { computeCartPricing, listDeliveryOptions } from '../pricing/pricing.service.js';
 import { TEMPLATE_NAMES, SPORT_LABELS, MIN_TOTAL_KITS } from '../pricing/pricing.constants.js';
 import { storeFromDataUrl, isImageDataUrl, assetExists } from '../assets/assets.service.js';
 import { withTransaction } from '../../db/tx.js';
@@ -202,8 +202,20 @@ export async function quoteCart({ items, deliveryId }) {
     });
   }
 
+  /**
+   * The delivery options with their prices, so the checkout selector can show all four without a
+   * hardcoded table of its own. A quote prices only the SELECTED method, and the selector exists
+   * to compare — so without this the frontend needs its own copy, which is exactly the second
+   * price table BASE_PRICES was deleted to remove.
+   *
+   * Fetched after pricing rather than in the Promise.all above: a cart that cannot be priced
+   * should not pay for this query, and an unavailable-items 422 returns before reaching here.
+   */
+  const deliveryOptions = await listDeliveryOptions();
+
   return {
     ...pricing,
+    deliveryOptions,
     // Server-supplied so the cart page renders "add N more" from this, never from a hardcoded 5.
     // MIN_TOTAL_KITS lives in one place and that place is not the frontend.
     belowMinimum: pricing.totalKits < MIN_TOTAL_KITS,

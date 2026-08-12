@@ -353,6 +353,34 @@ describe('POST /api/orders/quote', () => {
     expect(res.body.minimumKits).toBe(5);
   });
 
+  /**
+   * The checkout selector shows every delivery method so the user can compare, while a quote
+   * prices only the selected one. Without this the frontend would need its own price table beside
+   * the server's — the exact second table BASE_PRICES was deleted to remove.
+   */
+  it('returns every active delivery option with its price, for the selector', async () => {
+    const res = await quote(quoteBody([line()]));
+
+    expect(res.status).toBe(200);
+    expect(res.body.deliveryOptions.map((o) => o.id).sort())
+      .toEqual(['express', 'international', 'rush', 'standard']);
+    expect(res.body.deliveryOptions.find((o) => o.id === 'standard').price).toBe(0);
+    expect(res.body.deliveryOptions.find((o) => o.id === 'international').price).toBe(3500);
+    // Cheapest first, so the list order does not depend on insertion order.
+    const prices = res.body.deliveryOptions.map((o) => o.price);
+    expect(prices).toEqual([...prices].sort((a, b) => a - b));
+  });
+
+  it('omits a deactivated delivery method from the options', async () => {
+    await pool.execute("UPDATE delivery_methods SET is_active = 0 WHERE id = 'rush'");
+    try {
+      const res = await quote(quoteBody([line()]));
+      expect(res.body.deliveryOptions.map((o) => o.id)).not.toContain('rush');
+    } finally {
+      await pool.execute("UPDATE delivery_methods SET is_active = 1 WHERE id = 'rush'");
+    }
+  });
+
   it('reports belowMinimum false once the cart reaches the floor', async () => {
     const res = await quote(quoteBody([line({ quantity: 5 })]));
     expect(res.body.belowMinimum).toBe(false);

@@ -108,6 +108,25 @@ export async function computePricing({ kitType, template, sport, totalKits, deli
 }
 
 /**
+ * The delivery methods a customer may choose, with their prices.
+ *
+ * Exposed through the service rather than letting orders reach into pricing.repository directly —
+ * module -> own service -> own repository is the layering everywhere else, and a feature module
+ * importing another feature's repository is how that erodes.
+ *
+ * Money passes assertWholePkr for the same reason every other figure does: a fractional or
+ * overflowed price should fail loudly rather than be rendered to a customer.
+ */
+export async function listDeliveryOptions() {
+  const rows = await pricingRepository.findActiveDeliveryMethods();
+  return rows.map((row) => ({
+    id: row.id,
+    name: row.name,
+    price: assertWholePkr('deliveryPrice', row.price),
+  }));
+}
+
+/**
  * Prices a multi-line cart: per-item lines plus ONE cart-level delivery charge.
  *
  * Delivery is per-cart, not per-item — one address, one deliveryId, one parcel. Charging 500 four
