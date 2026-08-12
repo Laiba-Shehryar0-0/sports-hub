@@ -257,6 +257,11 @@ CREATE TABLE kit_prices (
 No `template` column: `BASE_PRICES` in `kitShapes.js` is keyed by `kit_type` alone — there is no
 per-template price variation in the source data (see `docs/EXTRACTED.md`).
 
+> **`BASE_PRICES` was deleted from `kitShapes.js` on 2026-08-12** and the frontend no longer prices
+> anything. The decision above stands and the reasoning is unchanged — `kit_prices` is still keyed
+> by `kit_type` alone — but read the sentence as the dated record of where that shape came from,
+> not as a claim about live frontend code.
+
 **`kit_label` is a display lookup, not a price input** — it never participates in the price
 calculation, it's just so the `/orders` response's `pricing.kitLabel` can be a plain `SELECT`
 alongside `unit_price` instead of a second round trip into a static JS map. `templateName` and

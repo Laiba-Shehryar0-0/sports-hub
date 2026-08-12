@@ -94,6 +94,12 @@ nest further).
 
 ## `DELIVERY_METHODS` (line 113-118)
 
+> **The `price` and `priceLabel` columns below no longer exist in the source — deleted on
+> 2026-08-12**, the same day as `BASE_PRICES` (see the note under that section). The array is still
+> in `kitShapes.js`, carrying `id`, `name`, `days` and `desc` only; delivery money comes from
+> `delivery_methods` via `deliveryOptions` on `POST /orders/quote`. The prices below are the dated
+> record of what that table was seeded from.
+
 | id | name | price (PKR) | priceLabel | days |
 |---|---|---|---|---|
 | `standard` | Standard Delivery | 0 | Free | 10–14 business days |

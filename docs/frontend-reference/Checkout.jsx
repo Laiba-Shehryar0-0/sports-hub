@@ -11,8 +11,8 @@ import {
   SHIPPING_COUNTRIES, DOMESTIC_COUNTRY, allowedDeliveryIds, isDeliveryAllowedForCountry,
 } from '../data/countries';
 import {
-  // DELIVERY_METHODS is imported for NAMES, ETAs and descriptions only. Its `price` field is no
-  // longer read here — delivery money comes from the quote, like every other figure.
+  // DELIVERY_METHODS carries names, ETAs and descriptions — no money at all since its `price`
+  // and `priceLabel` were deleted. Delivery money comes from the quote, like every other figure.
   KIT_TYPES, DELIVERY_METHODS, PAYMENT_METHODS,
 } from '../customize/kitShapes';
 import {

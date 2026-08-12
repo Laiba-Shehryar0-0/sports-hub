@@ -120,11 +120,23 @@ export const POSITIONS = [
  * in the browser, ask the server for one — do not add a table here.
  */
 
+/**
+ * Delivery methods — NAMES, ETAs and copy. DO NOT ADD `price` OR `priceLabel` BACK.
+ *
+ * Both fields were here until 2026-08-12: a second delivery price table beside
+ * `delivery_methods` in the database, agreeing with it by maintenance rather than by mechanism —
+ * the same drift class as the BASE_PRICES note above. They outlived their last reader by one
+ * commit, and a dormant price table gets a new one eventually.
+ *
+ * Delivery money comes from `deliveryOptions` on POST /api/orders/quote, which reads
+ * delivery_methods. What the two sides share is `id`; the price attached to that id is the
+ * server's to state.
+ */
 export const DELIVERY_METHODS = [
-  { id: 'standard',      name: 'Standard Delivery',      price: 0,    priceLabel: 'Free',       days: '10–14 business days', desc: 'Nationwide courier' },
-  { id: 'express',       name: 'Express Delivery',       price: 500,  priceLabel: 'PKR 500',    days: '5–7 business days',   desc: 'Priority production + courier', popular: true },
-  { id: 'rush',          name: 'Rush Order',             price: 1200, priceLabel: 'PKR 1,200',  days: '2–3 business days',   desc: 'Same day production start' },
-  { id: 'international', name: 'International Shipping', price: 3500, priceLabel: 'PKR 3,500',  days: '12–20 business days', desc: 'DHL / FedEx international' },
+  { id: 'standard',      name: 'Standard Delivery',      days: '10–14 business days', desc: 'Nationwide courier' },
+  { id: 'express',       name: 'Express Delivery',       days: '5–7 business days',   desc: 'Priority production + courier', popular: true },
+  { id: 'rush',          name: 'Rush Order',             days: '2–3 business days',   desc: 'Same day production start' },
+  { id: 'international', name: 'International Shipping', days: '12–20 business days', desc: 'DHL / FedEx international' },
 ];
 
 export const QUANTITY_PRESETS = [
