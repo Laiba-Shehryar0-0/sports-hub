@@ -287,8 +287,15 @@ whole PKR as `INT` and document it.** The principle that mattered was "integers,
 one consistent unit" — not the specific unit. Don't retrofit ×100 for its own sake; do write
 `-- whole PKR, no minor units` next to every money column so nobody guesses.
 
+> **Three of these columns no longer exist.** `design_json`, `unit_price` and `primary_size` were
+> made nullable by migration 007 (orders went header/lines: `orders` + `order_items`) and
+> **dropped by migration 008 on 2026-08-13**, with the legacy single-design payload they served.
+> The design, the ordered size and the unit price are now per LINE, on `order_items`. Read the DDL
+> below as the dated record of the original single-design design — the reasoning under it still
+> holds, and `src/db/migrations/` is what the table actually looks like.
+
 ```sql
--- 004_orders.sql
+-- 004_orders.sql  (as originally specified — see the note above)
 CREATE TABLE orders (
   id             BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
   reference      VARCHAR(30) NOT NULL,          -- 'KW-2026-000044', shown to the user
@@ -433,6 +440,12 @@ export const createOrderSchema = z.object({
   pricing: z.any().optional(),
 }).strict();
 ```
+
+> **`design`, `totalKits` and `primarySize` were removed from this schema on 2026-08-13** (cart
+> Phase 5). The payload is now `items: [{ design, size, quantity }]` — the 5-kit minimum became
+> cart-WIDE rather than a bound on a single field, and the ordered size moved onto the line. Every
+> bound defended below still applies; they moved, they were not relaxed. Live shape:
+> `src/modules/orders/orders.schema.js`.
 
 Why the specific bounds:
 

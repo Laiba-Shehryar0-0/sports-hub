@@ -150,6 +150,12 @@ export const createOrderSchema = z.object({
 }).strict();
 ```
 
+> **Dated record.** `design`, `totalKits` and `primarySize` were removed from the live schema on
+> 2026-08-13 (cart Phase 5) in favour of `items: [{ design, size, quantity }]`. The 5-kit floor
+> defended above still exists — it just applies across the whole cart now, checked in
+> `computeCartPricing` rather than as a bound on one field. The draft is kept as written because
+> the reasoning for each bound is the argument, and that has not changed.
+
 ---
 
 ## Bounds — final, with source

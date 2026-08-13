@@ -298,9 +298,16 @@ leak.
 
 **Why the obvious cleanup is dangerous.** A logo attached to a live design or a cart item is
 referenced *only* from that user's `localStorage`. Server-side it is **indistinguishable from an
-orphan**. A job that diffs the logos directory against `orders.design_json` and
-`order_items.design_json` **will delete logos out of live carts and in-progress designs** — the
-kit then renders with a broken image and the user has no idea why, having done nothing wrong.
+orphan**. A job that diffs the logos directory against `order_items.design_json` **will delete
+logos out of live carts and in-progress designs** — the kit then renders with a broken image and
+the user has no idea why, having done nothing wrong.
+
+> **`orders.design_json` was dropped in migration 008 (2026-08-13).** `order_items.design_json` is
+> now the *only* place an order's logo reference is stored, one row per line. A cleanup job written
+> against the old pair of columns would today read one that does not exist — and if it were written
+> defensively enough to skip the missing column rather than error, it would diff against nothing
+> and consider **every** logo an orphan. Read that as the argument for the age grace period below,
+> not as a reason to trust the diff.
 
 **What any future cleanup must do:**
 
@@ -331,7 +338,7 @@ broken image for it.
 so this one file quietly outranks the rule around it. The moment that logo is *replaced* — the
 order re-placed, the image re-uploaded, an asset pipeline re-run — the replacement is written under
 a **new UUID filename**, which the ignore rule does cover. `git add` skips it silently. Nothing
-errors, the commit looks clean, `orders.design_json` points at the new UUID, and a fresh clone
+errors, the commit looks clean, `order_items.design_json` points at the new UUID, and a fresh clone
 renders a broken image. The failure appears one clone later, far from the change that caused it.
 
 This is the same shape as the orphan-cleanup gap (added with Phase 2, `POST /api/assets`): the
@@ -346,9 +353,10 @@ point the seed at it, or give the environment a documented restore step. Until t
 must be added with an explicit `git add -f <path>`, and the `.gitignore` comment updated to name
 the new UUID.
 
-**To detect drift:** every `logoDataUrl` in `orders.design_json` / `order_items.design_json` should
-resolve to a file that is either tracked or reproducible. A `git check-ignore -v` over that list
-would catch a replacement that had been silently ignored.
+**To detect drift:** every `logoDataUrl` in `order_items.design_json` should resolve to a file that
+is either tracked or reproducible. A `git check-ignore -v` over that list would catch a replacement
+that had been silently ignored. (This said `orders.design_json` / `order_items.design_json` until
+migration 008 dropped the former on 2026-08-13; the lines table is now the only source.)
 
 ---
 

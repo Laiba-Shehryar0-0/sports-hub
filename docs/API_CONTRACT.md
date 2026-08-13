@@ -142,42 +142,112 @@ Request:
 ## Orders
 
 ### `POST /orders`
+
+> **Changed 2026-08-13 (cart Phase 5).** An order is now a CART: one header plus one line per
+> design. The former single-design body — `design` + `totalKits` + `primarySize` at the top level
+> — **is no longer accepted** and returns `422` naming those keys as unrecognized. The columns it
+> wrote (`orders.design_json`, `unit_price`, `primary_size`) were dropped in migration 008.
+
 Request:
 ```json
 {
-  "design": {
-    "kitType": "jersey", "sport": "football", "template": "solid", "size": "M",
-    "customSize": "", "customSizeUnit": "in",
-    "bodyColor": "#CC0000", "sleeveColor": "#1a1a1a", "numberColor": "#FFFFFF", "collarColor": "#1a1a1a",
-    "playerName": { "front": "SMITH", "back": "" }, "playerNumber": { "front": "10", "back": "" },
-    "font": "Bebas Neue", "logoDataUrl": null, "logoPreset": null
-  },
+  "items": [
+    {
+      "design": {
+        "kitType": "jersey", "kitProduct": "Football Jersey", "sport": "football",
+        "template": "solid", "size": "M", "customSize": "", "customSizeUnit": "in",
+        "bodyColor": "#CC0000", "sleeveColor": "#1a1a1a", "numberColor": "#FFFFFF", "collarColor": "#1a1a1a",
+        "playerName": { "front": "SMITH", "back": "" }, "playerNumber": { "front": "10", "back": "" },
+        "font": "Bebas Neue", "logoDataUrl": null, "logoPreset": null
+      },
+      "size": "M",
+      "quantity": 6
+    },
+    { "design": { "kitType": "shorts", "…": "…" }, "size": "L", "quantity": 5 }
+  ],
   "contact": { "firstName": "Jane", "lastName": "Doe", "email": "jane@example.com", "phone": "+92 300 1234567", "clubName": "" },
   "address": { "street": "...", "city": "...", "province": "", "postalCode": "", "country": "Pakistan" },
   "deliveryId": "express",
   "paymentId": "card",
-  "totalKits": 11,
-  "primarySize": "M",
-  "instructions": "",
+  "instructions": ""
+}
+```
+
+`design` is the full customizer state (see `src/customize/kitShapes.js` → `DEFAULT_DESIGN` for
+every field it can contain — colors, template, logo, text positions, etc). `deliveryId` is one of
+`standard`/`express`/`rush`/`international` (`DELIVERY_METHODS` in the same file). `paymentId` is
+one of `card`/`bank`/`cod`.
+
+Per line: `size` is the size ORDERED and is what reaches `order_items.size`; `design.size` is part
+of the design snapshot and is not cross-checked against it. `quantity` is at least 1 per line.
+
+**Bounds.** 1–20 lines. **The 5-kit minimum is cart-WIDE, not per line** — 3 jerseys + 2 shorts is
+a valid order, a single line of 3 is not. Ceiling is 500 kits across all lines.
+
+**`address.country` and `deliveryId` must agree.** Anything outside Pakistan must use
+`international`; Pakistan must not. Mismatch is a `422` with the allowed ids in
+`details.deliveryId`.
+
+**Card details are validated client-side but are never sent to `/orders`** — only `paymentId` is
+sent. If you need real card processing, that's a separate payment-gateway integration (Stripe/etc.),
+not part of this payload.
+
+**`pricing` may still be sent and is ignored.** The server recomputes every figure from
+`kit_prices` and `delivery_methods` and persists only its own. Send it or don't; a tampered total
+changes nothing except a `price_mismatch` line in the server log.
+
+**`Idempotency-Key` header** (optional, a UUID): send ONE key per checkout attempt and reuse it on
+every retry of that attempt. A repeat returns the original order rather than creating a second.
+Generating a fresh key per request populates the column while protecting nothing.
+
+Response `201`:
+```json
+{
+  "id": 44,
+  "reference": "KW-2026-000044",
+  "status": "placed",
   "pricing": {
-    "kitLabel": "Jersey", "templateName": "Solid", "sportLabel": "Football",
-    "unitPrice": 2800, "kitPrice": 30800,
-    "deliveryName": "Express Delivery", "deliveryPrice": 500,
-    "discount": 0, "promoApplied": null, "total": 31300
+    "items": [
+      { "position": 1, "kitType": "jersey", "kitLabel": "Jersey",
+        "templateName": "Solid", "sportLabel": "Football",
+        "size": "M", "quantity": 6, "unitPrice": 2800, "lineTotal": 16800 }
+    ],
+    "totalKits": 11,
+    "kitPrice": 24300,
+    "deliveryName": "Express Delivery",
+    "deliveryPrice": 500,
+    "discount": 0,
+    "total": 24800
   }
 }
 ```
-`design` is the full customizer state (see `src/customize/kitShapes.js` →
-`DEFAULT_DESIGN` for every field it can contain — colors, template, logo, text
-positions, etc). `deliveryId` is one of `standard`/`express`/`rush`/`international`
-(`DELIVERY_METHODS` in the same file). `paymentId` is one of `card`/`bank`/`cod`.
+All money is whole PKR integers. Delivery is charged ONCE per cart, not per line.
 
-**Card details are validated client-side but are never sent to `/orders`** — only
-`paymentId` is sent. If you need real card processing, that's a separate payment-
-gateway integration (Stripe/etc.), not part of this payload.
+### `POST /orders/quote`
+**Requires auth.** Prices a cart in progress and **creates nothing** — no order, no lines, no
+files. It exists so the cart and checkout pages never compute a price themselves.
 
-Response: any 2xx — return at least an order id/reference so a future "order
-history" feature has something to key off.
+```json
+{ "items": [ { "design": { "…": "…" }, "size": "M", "quantity": 3 } ], "deliveryId": "standard" }
+```
+
+Same line shape and bounds as `POST /orders`, with no `contact` or `address` — a cart page has
+neither, and demanding them to see a price would be absurd.
+
+Response `200`: the `pricing` object above, plus:
+- `deliveryOptions`: `[{ "id": "standard", "name": "Standard Delivery", "price": 0 }, …]` — every
+  active method with its price, so the checkout selector can show all four without keeping a price
+  table of its own.
+- `belowMinimum` / `minimumKits`: a cart under the floor is still PRICED (`200`, `belowMinimum:
+  true`) rather than refused, so the page can show a running total while the user decides whether
+  to add more. Read `minimumKits` for the "add N more" message — never hardcode 5.
+
+Response `422` `QUOTE_UNAVAILABLE`: a line can no longer be priced. `details.unavailableKitTypes`
+lists retired kit types; `details.missingLogoPositions` lists 1-based line positions whose uploaded
+logo has been swept away. Both are reported together in one response.
+
+Rate limit: 120/hour per user (the cart re-quotes on every debounced edit). `POST /orders` is
+10/hour per IP.
 
 ---
 
@@ -217,6 +287,12 @@ should not be separated by so long that a cleanup could run in between.
 ---
 
 ## Suggested MySQL tables (a starting point, not mandatory)
+
+> **Dated record — this is the original suggestion, not the live schema.** The `orders` sketch
+> below is single-design: `design_json NOT NULL` and one order = one kit. The real schema went
+> header/lines in migration 007 (`orders` + `order_items`) and **dropped `design_json`,
+> `unit_price` and `primary_size` from `orders` in migration 008 on 2026-08-13**. For what actually
+> exists, read `src/db/migrations/`.
 
 ```sql
 CREATE TABLE users (
