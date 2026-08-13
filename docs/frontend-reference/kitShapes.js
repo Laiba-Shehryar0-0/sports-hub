@@ -337,6 +337,7 @@ export const PRODUCT_SHAPES = {
   'Training Vest':     'sleeveless',
   'Training Bib':      'sleeveless',
   'Goalkeeper Shirt':  'long-sleeve',
+  'Cycling Shirt':     'zip-top',
 };
 
 /**
@@ -435,6 +436,35 @@ export function getKitPath(type, kitProduct = null) {
         w: 300, h: 360,
         body: 'M 112,38 Q 150,72 188,38 L 246,52 L 288,88 L 296,150 L 278,225 L 260,268 L 238,264 L 242,185 L 248,106 L 248,316 L 52,316 L 52,106 L 58,185 L 62,264 L 40,268 L 22,225 L 4,150 L 12,88 L 54,52 Z',
         collar: 'M 112,38 Q 131,42 150,70 Q 169,42 188,38 L 176,44 L 150,70 L 124,44 Z',
+      };
+    /**
+     * Close-fitting short sleeve with a centre zip — Cycling Shirt.
+     *
+     * PROVENANCE: hand-written from the `jersey` body above, same coordinate space, not traced.
+     * Neck, shoulders, sleeves and the hem corners are jersey's UNCHANGED:
+     *
+     *   neck opening    x 112 -> 188 at y=38   (collar path is jersey's, unmodified)
+     *   shoulder ends   (246,52) and (54,52)
+     *   sleeve points   (288,88 / 296,124 / 268,138) and their mirrors — identical to jersey
+     *   underarm        (248,106) and (52,106)
+     *   hem corners     (248,316) and (52,316)
+     *
+     * What changed: jersey's torso sides run straight from underarm to hem — a rectangle. This
+     * inserts two extra points per side, at y=150 and y=250, pulled in 9 units from the 248/52
+     * baseline (to 239/61), then returns to the unchanged hem corners. That waist pinch, held
+     * between two anchors that don't move, is what a close taper needs without touching any anchor
+     * the rest of the system depends on. `zip: true` is presence-driven like `placket` — KitBody
+     * draws the actual zip line from `kit.w`, since a centre zip is always w/2 by construction and
+     * doesn't need its own stored path.
+     */
+    case 'zip-top':
+      return {
+        family: 'top',
+        viewBox: '0 0 300 360',
+        w: 300, h: 360,
+        body: 'M 112,38 Q 150,72 188,38 L 246,52 L 288,88 L 296,124 L 268,138 L 248,106 L 239,150 L 239,250 L 248,316 L 52,316 L 61,250 L 61,150 L 52,106 L 32,138 L 4,124 L 12,88 L 54,52 Z',
+        collar: 'M 112,38 Q 131,42 150,70 Q 169,42 188,38 L 176,44 L 150,70 L 124,44 Z',
+        zip: true,
       };
     case 'polo':
       return {
