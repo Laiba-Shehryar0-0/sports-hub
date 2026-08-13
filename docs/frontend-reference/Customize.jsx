@@ -1,4 +1,4 @@
-// Snapshot of ../kit-frontend as of 2026-08-09 — reference only, do not edit here.
+// Snapshot of ../kit-frontend as of 2026-08-13 — reference only, do not edit here.
 // Source: src/pages/Customize.jsx
 
 import { useState, useRef, useCallback, useEffect } from 'react';
@@ -10,7 +10,7 @@ import {
   KIT_TYPES, SPORTS, SIZES, SIZE_UNITS, COLOR_PALETTE, APPLY_TARGETS,
   FONTS, DESIGN_TEMPLATES, BADGE_PRESETS, POSITIONS,
   DESIGN_STORAGE_KEY, SAVED_DESIGNS_KEY, loadStoredDesign,
-  loadEditedKitImage, clearEditedKitImage,
+  loadEditedKitImage, clearEditedKitImage, resolveShapeKey,
 } from '../customize/kitShapes';
 import {
   STORAGE_MESSAGE, writeStorage, readSavedDesigns, capSavedDesigns,
@@ -78,8 +78,12 @@ import cyclingKitBackImg from '../assets/cycling-kit-back.png';
 import rugbyKitImg from '../assets/rugby-kit-front.png';
 import rugbyKitBackImg from '../assets/rugby-kit-back.png';
 
-/** Sport → specific product catalog, each mapped to a KIT_TYPES id so the SVG preview knows what to render */
-const SPORT_KIT_GROUPS = [
+/**
+ * Sport → specific product catalog, each mapped to a KIT_TYPES id so the SVG preview knows what to
+ * render. Exported so productShapes.test.js can assert every label here resolves to a deliberate
+ * shape — see kitShapes.js's PRODUCT_SHAPES doc comment for why that guard exists.
+ */
+export const SPORT_KIT_GROUPS = [
   {
     id: 'cricket', label: 'Cricket',
     items: [
@@ -289,11 +293,11 @@ export default function Customize() {
 
   // Shows the flattened, drawn-on kit from the Kit Editor (if this side has one) in place of the
   // live SVG preview — so coming "Back" from editing actually shows what was drawn.
-  const [editedKitUrl, setEditedKitUrl] = useState(() => loadEditedKitImage(side, design.kitType));
+  const [editedKitUrl, setEditedKitUrl] = useState(() => loadEditedKitImage(side, resolveShapeKey(design.kitType, design.kitProduct)));
 
   useEffect(() => {
-    setEditedKitUrl(loadEditedKitImage(side, design.kitType));
-  }, [side, design.kitType]);
+    setEditedKitUrl(loadEditedKitImage(side, resolveShapeKey(design.kitType, design.kitProduct)));
+  }, [side, design.kitType, design.kitProduct]);
 
   // Arriving from a Kits catalog card (?kit=<slug>) chooses a specific garment, but that path
   // sets state directly instead of going through a mutator, so nothing else clears the frozen
@@ -564,6 +568,7 @@ export default function Customize() {
                 ) : (
                   <KitPreview
                     kitType={design.kitType}
+                    kitProduct={design.kitProduct}
                     bodyColor={design.bodyColor}
                     sleeveColor={design.sleeveColor}
                     numberColor={design.numberColor}

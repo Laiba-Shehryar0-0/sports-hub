@@ -1,4 +1,4 @@
-// Snapshot of ../kit-frontend as of 2026-08-04 — reference only, do not edit here.
+// Snapshot of ../kit-frontend as of 2026-08-13 — reference only, do not edit here.
 // Source: src/customize/KitCanvasEditor.jsx
 
 import { useState, useRef, useEffect, useCallback } from 'react';
@@ -6,7 +6,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { Canvas, PencilBrush, Textbox, FabricImage, Ellipse, Polygon, Path } from 'fabric';
 import KitPreview from './KitPreview';
-import { COLOR_PALETTE, FONTS, loadStoredDesign, DRAWN_LOGO_KEY, saveEditedKitImage, KIT_CANVAS_STATE_KEY } from './kitShapes';
+import { COLOR_PALETTE, FONTS, loadStoredDesign, DRAWN_LOGO_KEY, saveEditedKitImage, KIT_CANVAS_STATE_KEY, resolveShapeKey } from './kitShapes';
 import {
   IconSelect, IconDraw, IconText, IconUndo, IconRedo, IconExport, IconLayers,
   IconEye, IconEyeOff, IconTrash, IconChevronLeft, IconBucket, IconEraser, IconShapes,
@@ -617,7 +617,7 @@ export default function KitCanvasEditor({ mode, initialSide = 'front' }) {
   const goBackToStudio = () => {
     if (mode === 'kit' && fabricRef.current) {
       const url = fabricRef.current.toDataURL({ format: 'png', multiplier: EXPORT_MULTIPLIER });
-      saveEditedKitImage(initialSide, url, design.kitType);
+      saveEditedKitImage(initialSide, url, resolveShapeKey(design.kitType, design.kitProduct));
       saveKitCanvasState(initialSide, fabricRef.current.toJSON());
       // Carry the side back so Customize reopens on the same side just edited — otherwise its
       // own side state always defaults to 'front' on remount, showing the wrong side's result.

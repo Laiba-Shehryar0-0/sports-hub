@@ -1,4 +1,4 @@
-// Snapshot of ../kit-frontend as of 2026-08-12 — reference only, do not edit here.
+// Snapshot of ../kit-frontend as of 2026-08-13 — reference only, do not edit here.
 // Source: src/pages/Checkout.jsx
 
 import { useState, useCallback, useEffect, useRef } from 'react';
@@ -209,7 +209,8 @@ export default function Checkout() {
                   <li key={item.id} className="flex gap-4 items-start">
                     <div className="w-[72px] h-[72px] flex-shrink-0 bg-[linear-gradient(160deg,var(--color-canvas-light)_0%,var(--color-canvas-light-dark)_100%)] rounded-md p-1.5">
                       <KitPreview
-                        kitType={item.design.kitType} bodyColor={item.design.bodyColor} sleeveColor={item.design.sleeveColor}
+                        kitType={item.design.kitType} kitProduct={item.design.kitProduct}
+                        bodyColor={item.design.bodyColor} sleeveColor={item.design.sleeveColor}
                         numberColor={item.design.numberColor} collarColor={item.design.collarColor} opacity={item.design.opacity}
                         template={item.design.template} playerName={item.design.playerName} playerNumber={item.design.playerNumber}
                         font={item.design.font} nameSize={item.design.nameSize} numberSize={item.design.numberSize}

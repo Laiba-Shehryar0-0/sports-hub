@@ -1,4 +1,4 @@
-// Snapshot of ../kit-frontend as of 2026-08-12 — reference only, do not edit here.
+// Snapshot of ../kit-frontend as of 2026-08-13 — reference only, do not edit here.
 // Source: src/customize/kitShapes.js
 
 /**
@@ -192,31 +192,46 @@ export const EDITED_KIT_KEY = 'kitlab_edited_kit';
 // re-rendering a fresh blank canvas from the live design every time.
 export const KIT_CANVAS_STATE_KEY = 'kitlab_kit_canvas_state';
 
-/** Reads the flattened, drawn-on kit image for one side, if the user has edited and saved it
- *  from the Kit Editor. Returns null unless the snapshot was drawn on `kitType` — a frozen
- *  jersey must never replay on top of a jumper just because it's still in storage. */
-export function loadEditedKitImage(side, kitType) {
+/**
+ * Reads the flattened, drawn-on kit image for one side, if the user has edited and saved it from
+ * the Kit Editor. Returns null unless the snapshot was drawn on this exact SHAPE.
+ *
+ * ┌─ TAGGED BY SHAPE KEY, NOT kitType — AND THAT CHANGED FOR A REASON ────────────────────────────┐
+ * │ This used to compare `entry.kitType === kitType`, which was sufficient while one kitType meant │
+ * │ one silhouette. It stopped being sufficient the moment product shapes landed: Training Bib and │
+ * │ Basketball Jersey are both kitType 'jersey' but render as `sleeveless` and — for the bib —     │
+ * │ they are different garments a user draws on differently. Under the old comparison a drawing    │
+ * │ made on one would replay on the other, which is precisely the bug the tag exists to prevent,   │
+ * │ reintroduced through the side door.                                                            │
+ * │                                                                                                │
+ * │ Callers pass resolveShapeKey(design.kitType, design.kitProduct). Entries written before this   │
+ * │ carry a `kitType` field and no `shape`, and are treated as stale — the same conservative       │
+ * │ handling already applied to the untagged entries below. A discarded drawing is recoverable;    │
+ * │ one replayed onto the wrong garment silently is not.                                           │
+ * └────────────────────────────────────────────────────────────────────────────────────────────────┘
+ */
+export function loadEditedKitImage(side, shapeKey) {
   try {
     const raw = localStorage.getItem(EDITED_KIT_KEY);
     if (!raw) return null;
     const entry = JSON.parse(raw)?.[side];
-    // Pre-tagging entries were a bare data-URL string with no kitType recorded. There's no way
-    // to prove which garment they came from, so treat them as stale rather than risk the bug
+    // Pre-tagging entries were a bare data-URL string with no garment recorded. There's no way
+    // to prove which one they came from, so treat them as stale rather than risk the bug
     // this guard exists to stop.
     if (!entry || typeof entry !== 'object') return null;
-    return entry.kitType === kitType ? entry.url : null;
+    return entry.shape === shapeKey ? entry.url : null;
   } catch {
     return null;
   }
 }
 
-/** Persists the flattened, drawn-on kit image for one side, tagged with the kitType it was
- *  drawn on so it can never be shown for a different garment later. */
-export function saveEditedKitImage(side, dataUrl, kitType) {
+/** Persists the flattened, drawn-on kit image for one side, tagged with the SHAPE it was drawn
+ *  on so it can never be shown for a different silhouette later — see loadEditedKitImage. */
+export function saveEditedKitImage(side, dataUrl, shapeKey) {
   try {
     const raw = localStorage.getItem(EDITED_KIT_KEY);
     const parsed = raw ? JSON.parse(raw) : {};
-    parsed[side] = { url: dataUrl, kitType };
+    parsed[side] = { url: dataUrl, shape: shapeKey };
     localStorage.setItem(EDITED_KIT_KEY, JSON.stringify(parsed));
   } catch {
     /* storage unavailable */
@@ -289,19 +304,141 @@ export function loadStoredDesign() {
   }
 }
 
-/** Returns SVG path/viewBox data for each kit type */
-export function getKitPath(type) {
-  switch (type) {
+/**
+ * PRODUCT → SILHOUETTE. Keyed by the `kitProduct` LABEL, deliberately.
+ *
+ * ┌─ WHY A DISPLAY STRING IS THE KEY ─────────────────────────────────────────────────────────────┐
+ * │ `kitType` cannot carry this. It is a backend zod enum of six values AND the pricing key       │
+ * │ (kit_prices.kit_type), so a seventh value 422s every order with PRICING_UNKNOWN_KIT_TYPE      │
+ * │ until a migration and a seed row exist. Whether a bib costs less than a jersey is a product   │
+ * │ decision; it must not be forced by a drawing change. So: six kitTypes for PRICING, this map   │
+ * │ for RENDERING.                                                                                │
+ * │                                                                                               │
+ * │ `kitProduct` already exists, is already persisted in design_json, and is already in the       │
+ * │ backend schema — so this needs no migration and keeps working for carts and order records     │
+ * │ that were saved before it existed. A new `design.shape` field would hit .strict() and 422     │
+ * │ every order until the backend shipped in lockstep.                                            │
+ * │                                                                                               │
+ * │ The cost: it is the LABEL ("Goalkeeper Shirt"), not a slug, because that is what Customize    │
+ * │ persists and what Cart and Checkout render as the product name. Rename a product without      │
+ * │ updating this map and its silhouette silently reverts to the kitType fallback.                │
+ * │                                                                                               │
+ * │ THAT IS GUARDED BY A TEST, NOT BY CARE: productShapes.test.js asserts every label in          │
+ * │ SPORT_KIT_GROUPS resolves. It turns a silent wrong shape into a red build, and it is the      │
+ * │ reason this key is acceptable at all. Do not delete it as redundant.                          │
+ * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * Products absent from this map fall back to their kitType shape — which is correct, not a gap:
+ * Football Jersey, Training T-Shirt and Hockey Shirt genuinely share one outline, and inventing a
+ * difference between them would misrepresent the product. See docs/kit-shape-audit.md §4.
+ */
+export const PRODUCT_SHAPES = {
+  'Basketball Jersey': 'sleeveless',
+  'Training Vest':     'sleeveless',
+  'Training Bib':      'sleeveless',
+  'Goalkeeper Shirt':  'long-sleeve',
+};
+
+/**
+ * The shape a design actually renders as. Falls back to kitType when the product has no override.
+ *
+ * Exported because it is not only the renderer's business: the drawn-on-kit snapshot is tagged
+ * with this, so a drawing made on a bib cannot replay on a basketball jersey — the two share
+ * kitType 'jersey' and would otherwise be indistinguishable to that guard.
+ */
+export function resolveShapeKey(kitType, kitProduct = null) {
+  return (kitProduct && PRODUCT_SHAPES[kitProduct]) || kitType;
+}
+
+/**
+ * Returns SVG path/viewBox data for a garment.
+ *
+ * `kitProduct` is optional: called with one argument this behaves exactly as it did before product
+ * shapes existed, which is what keeps stored designs rendering.
+ *
+ * `family` decides which renderer branch in KitPreview draws it. KitBody used to switch on kitType
+ * string equality, which does not survive a dozen shapes sharing six kitTypes.
+ *
+ * Note there is no `cx`/`cy`/`r` on new shapes: those keys exist on the original six and nothing
+ * has ever read them. Name, number and logo anchors are fractions of `w`/`h` computed in
+ * KitPreview, which is why every top keeps the 300x360 box — it inherits placement for free.
+ */
+export function getKitPath(type, kitProduct = null) {
+  switch (resolveShapeKey(type, kitProduct)) {
     case 'jersey':
       return {
+        family: 'top',
         viewBox: '0 0 300 360',
         w: 300, h: 360,
         body: 'M 112,38 Q 150,72 188,38 L 246,52 L 288,88 L 296,124 L 268,138 L 248,106 L 248,316 L 52,316 L 52,106 L 32,138 L 4,124 L 12,88 L 54,52 Z',
         collar: 'M 112,38 Q 131,42 150,70 Q 169,42 188,38 L 176,44 L 150,70 L 124,44 Z',
         cx: 150, cy: 200, r: 60,
       };
+
+    /**
+     * Sleeveless singlet — Basketball Jersey, Training Vest, Training Bib.
+     *
+     * PROVENANCE: hand-written from the `jersey` body above, in the same coordinate space. Not
+     * traced, not from a stock vector. Only the shoulder-to-underarm run differs; every anchor the
+     * rest of the system depends on is held identical to jersey:
+     *
+     *   neck opening  x 112 -> 188 at y=38   (the collar path below is jersey's, unmodified)
+     *   torso sides   x=52 and x=248
+     *   hem           y=316
+     *
+     * What changed, and why it reads as sleeveless at 88px rather than only at full size:
+     *   - The shoulder ends pull in from x=246/54 to x=214/86, leaving a 26-unit strap.
+     *   - The four sleeve points (288,88 / 296,124 / 268,138 / 248,106 and their mirrors) are gone.
+     *   - A cubic sweeps from the strap down to the side seam at y=170, bowing INWARD (control
+     *     points at x=206 and x=214 against a 248 side) so the armhole is a scoop cut into the
+     *     outline, not a bulge. The gap between torso and arm is what the eye reads at thumbnail
+     *     size; a shallow notch would just look like a badly drawn sleeve.
+     *
+     * The armhole bottoms out 47% down the body (y=170 of 38->316), which is deep — correct for a
+     * basketball singlet, and deliberately past the point where it could be mistaken for a cap
+     * sleeve.
+     */
+    case 'sleeveless':
+      return {
+        family: 'top',
+        viewBox: '0 0 300 360',
+        w: 300, h: 360,
+        body: 'M 112,38 Q 150,72 188,38 L 214,48 C 206,90 214,140 248,170 L 248,316 L 52,316 L 52,170 C 86,140 94,90 86,48 Z',
+        collar: 'M 112,38 Q 131,42 150,70 Q 169,42 188,38 L 176,44 L 150,70 L 124,44 Z',
+      };
+    /**
+     * Full-length sleeve to the wrist — Goalkeeper Shirt.
+     *
+     * PROVENANCE: hand-written from the `jersey` body above, same coordinate space, not traced.
+     * The shoulder and cap points are jersey's UNCHANGED (246,52 / 288,88 and their mirrors), so
+     * the sleeve starts identically at full size and at thumbnail size — only past the cap does it
+     * diverge:
+     *
+     *   neck opening  x 112 -> 188 at y=38   (collar path is jersey's, unmodified)
+     *   shoulder ends (246,52) and (54,52)   (identical to jersey)
+     *   torso sides   x=52 and x=248
+     *   underarm      (248,106) and (52,106) (identical to jersey — the torso outline below the
+     *                                         arm is untouched by sleeve length)
+     *   hem           y=316
+     *
+     * What changed: past the cap (288,88 / 12,88), jersey closes the sleeve immediately (down to
+     * y=124, back in to a cuff at y=138, then up to the underarm). This instead keeps going past
+     * that point — outward to 296,150 (jersey's own max reach, just lower), tapering the forearm
+     * inward through 278,225 to a wrist corner at 260,268, a 22-unit cuff edge to 238,264, then
+     * back up the inner seam through 242,185 to the same underarm point jersey uses. Four points
+     * per side instead of jersey's two is what keeps the taper looking like an arm and not a flag.
+     */
+    case 'long-sleeve':
+      return {
+        family: 'top',
+        viewBox: '0 0 300 360',
+        w: 300, h: 360,
+        body: 'M 112,38 Q 150,72 188,38 L 246,52 L 288,88 L 296,150 L 278,225 L 260,268 L 238,264 L 242,185 L 248,106 L 248,316 L 52,316 L 52,106 L 58,185 L 62,264 L 40,268 L 22,225 L 4,150 L 12,88 L 54,52 Z',
+        collar: 'M 112,38 Q 131,42 150,70 Q 169,42 188,38 L 176,44 L 150,70 L 124,44 Z',
+      };
     case 'polo':
       return {
+        family: 'top',
         viewBox: '0 0 300 360',
         w: 300, h: 360,
         body: 'M 112,38 Q 150,72 188,38 L 246,52 L 288,88 L 296,124 L 268,138 L 248,106 L 248,316 L 52,316 L 52,106 L 32,138 L 4,124 L 12,88 L 54,52 Z',
@@ -312,6 +449,7 @@ export function getKitPath(type) {
       };
     case 'jumper':
       return {
+        family: 'top',
         viewBox: '0 0 300 360',
         w: 300, h: 360,
         body: 'M 108,42 Q 150,78 192,42 L 252,56 L 294,96 L 300,136 L 270,148 L 248,112 L 248,356 L 52,356 L 52,112 L 30,148 L 0,136 L 6,96 L 48,56 Z',
@@ -321,6 +459,7 @@ export function getKitPath(type) {
       };
     case 'shorts':
       return {
+        family: 'legs',
         viewBox: '0 0 280 200',
         w: 280, h: 200,
         body: 'M 20,10 L 260,10 L 240,190 L 170,190 L 140,100 L 110,190 L 40,190 Z',
@@ -329,6 +468,7 @@ export function getKitPath(type) {
       };
     case 'socks':
       return {
+        family: 'socks',
         viewBox: '0 0 160 300',
         w: 160, h: 300,
         body: 'M 32,8 L 128,8 L 128,180 Q 128,206 150,218 Q 158,224 153,244 L 142,282 Q 136,300 108,300 L 52,300 Q 26,300 20,282 L 11,244 Q 6,224 22,216 Q 32,204 32,180 Z',
@@ -337,6 +477,7 @@ export function getKitPath(type) {
       };
     case 'cap':
       return {
+        family: 'head',
         viewBox: '0 0 300 200',
         w: 300, h: 200,
         dome: 'M 30,120 Q 30,20 150,20 Q 270,20 270,120 Z',
@@ -346,7 +487,7 @@ export function getKitPath(type) {
         cx: 150, cy: 80, r: 32,
       };
     default:
-      console.warn(`[kitShapes] Unknown kitType "${type}" — falling back to jersey.`);
+      console.warn(`[kitShapes] Unknown shape for kitType "${type}" / product "${kitProduct}" — falling back to jersey.`);
       return getKitPath('jersey');
   }
 }
