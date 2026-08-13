@@ -33,82 +33,22 @@ function assertWholePkr(label, value) {
 }
 
 /**
- * ┌─ NOT CALLED IN PRODUCTION AS OF THIS COMMIT ─────────────────────────────────────────────────┐
- * │ orders.service now prices BOTH payload shapes through computeCartPricing(): the legacy       │
- * │ single-design body is normalised by orders.schema into a one-item cart, so there is one       │
- * │ pricing path rather than two that can drift.                                                 │
- * │                                                                                              │
- * │ The ONLY remaining caller is pricing.test.js — its 23 tests, plus the 72-case characterization│
- * │ matrix asserting that a one-item cart agrees with this function on every figure. That matrix  │
- * │ is what made the switch safe, and it is the reason this function is still here.               │
- * │                                                                                              │
- * │ SCHEDULED FOR REMOVAL IN PHASE 5, with the legacy payload branch it used to serve. Until      │
- * │ then: DO NOT FIX A PRICING BUG HERE. A change made here changes nothing a customer is         │
- * │ charged — computeCartPricing below is what runs. Fix it there, and if the two must agree,     │
- * │ the characterization test will tell you.                                                     │
- * └──────────────────────────────────────────────────────────────────────────────────────────────┘
+ * ┌─ computePricing() WAS DELETED HERE ON 2026-08-13 (Phase 5) ───────────────────────────────────┐
+ * │ It priced a single design — one kitType, one totalKits — and served the legacy order payload  │
+ * │ removed in the same phase. Its last caller was its own test file.                             │
+ * │                                                                                               │
+ * │ It survived the cart migration on purpose: a 72-case characterization matrix asserted that a  │
+ * │ one-item cart agreed with it on unitPrice, kitPrice, deliveryPrice, discount and total across │
+ * │ every kit type, delivery method and boundary quantity. That matrix was the evidence that made │
+ * │ switching the order path to computeCartPricing safe, and it could not outlive the function it │
+ * │ compared against — expected values were produced BY computePricing, never hand-written.       │
+ * │                                                                                               │
+ * │ What did outlive it: the five assertions that had no cart equivalent — the API_CONTRACT       │
+ * │ worked example, the six-kit-type price sweep, free standard delivery, template-does-not-price │
+ * │ and the INT UNSIGNED ceiling — ported to computeCartPricing in pricing.test.js. If you are    │
+ * │ here looking for the old numbers, they are those tests.                                       │
+ * └───────────────────────────────────────────────────────────────────────────────────────────────┘
  */
-export async function computePricing({ kitType, template, sport, totalKits, deliveryId }) {
-  // Bounds are enforced here as well as at the route's zod schema: this function is the last
-  // thing between an order and a persisted money column, and it is callable directly.
-  if (!Number.isInteger(totalKits) || totalKits < MIN_TOTAL_KITS || totalKits > MAX_TOTAL_KITS) {
-    throw new AppError(
-      `Order quantity must be a whole number between ${MIN_TOTAL_KITS} and ${MAX_TOTAL_KITS}.`,
-      { statusCode: 422, code: 'PRICING_INVALID_QUANTITY', details: { totalKits } },
-    );
-  }
-
-  const [kit, delivery] = await Promise.all([
-    pricingRepository.findKitPrice(kitType),
-    pricingRepository.findDeliveryMethod(deliveryId),
-  ]);
-
-  // Deliberately NOT the fallbacks the checkout page used to price with. Until 2026-08-12 the
-  // frontend computed its own total from `BASE_PRICES[kitType] ?? 2800` and
-  // `DELIVERY_METHODS.find(...) ?? DELIVERY_METHODS[0]`; BASE_PRICES has since been deleted and
-  // the frontend delivery table is kept for names and ETAs only. Silently pricing an unknown
-  // kitType as a jersey, or an unknown deliveryId as free standard shipping, is how a tampered
-  // payload gets underpriced, so both are a 422 here regardless of what the client does.
-  if (!kit) {
-    throw new AppError('That kit type is not available.', {
-      statusCode: 422, code: 'PRICING_UNKNOWN_KIT_TYPE', details: { kitType },
-    });
-  }
-  if (!delivery) {
-    throw new AppError('That delivery method is not available.', {
-      statusCode: 422, code: 'PRICING_UNKNOWN_DELIVERY', details: { deliveryId },
-    });
-  }
-
-  const unitPrice = assertWholePkr('unitPrice', kit.unit_price);
-  const deliveryPrice = assertWholePkr('deliveryPrice', delivery.price);
-
-  // Flat linear — no quantity tiers or bulk breakpoints exist in the source pricing
-  // (docs/EXTRACTED.md §1).
-  const kitPrice = assertWholePkr('kitPrice', unitPrice * totalKits);
-
-  // Always 0: promo codes are out of scope because the frontend never sends the code itself,
-  // only the resulting discount fraction, and that arrives inside the `pricing` object the server
-  // must discard. See docs/known-gaps.md and docs/backend-plan.md §8.
-  const discount = 0;
-
-  // Order of operations is load-bearing: the discount comes off kitPrice BEFORE delivery is
-  // added, so delivery is never discounted. Indistinguishable while discount is 0, but writing it
-  // the other way would bake in a bug for whenever promo codes land.
-  const total = assertWholePkr('total', kitPrice - discount + deliveryPrice);
-
-  return {
-    unitPrice,
-    kitLabel: kit.kit_label,
-    templateName: TEMPLATE_NAMES[template] ?? template,
-    sportLabel: SPORT_LABELS[sport] ?? sport,
-    kitPrice,
-    deliveryName: delivery.name,
-    deliveryPrice,
-    discount,
-    total,
-  };
-}
 
 /**
  * The delivery methods a customer may choose, with their prices.
@@ -135,9 +75,8 @@ export async function listDeliveryOptions() {
  * Delivery is per-cart, not per-item — one address, one deliveryId, one parcel. Charging 500 four
  * times for one shipment would simply be wrong.
  *
- * computePricing() above is left untouched and still serves the single-design path. For a
- * one-item cart the two agree on unitPrice, kitPrice, deliveryPrice, discount and total; there is
- * a characterization test asserting exactly that against every kit type and delivery method.
+ * Since Phase 5 this is the ONLY place order money is decided. A one-line cart is not a special
+ * case of it; it is just a cart with one line.
  */
 /**
  * `enforceMinimum` exists because MIN_TOTAL_KITS is an ORDER-ELIGIBILITY rule that lives in this
@@ -251,8 +190,9 @@ export async function computeCartPricing({ items, deliveryId, enforceMinimum = t
     };
   });
 
-  // Named kitPrice, not itemsTotal: identical meaning to computePricing.kitPrice and maps 1:1 to
-  // orders.kit_price, so nothing has to translate between the two paths.
+  // Named kitPrice, not itemsTotal: it maps 1:1 to orders.kit_price and to the `kitPrice` the
+  // contract has always returned, so nothing has to translate between the column, the response
+  // and this variable.
   const kitPrice = assertWholePkr('kitPrice', lines.reduce((sum, line) => sum + line.lineTotal, 0));
 
   // Always 0 — promo codes are out of scope (docs/known-gaps.md, backend-plan §8).

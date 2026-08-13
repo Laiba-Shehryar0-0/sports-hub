@@ -11,23 +11,16 @@ const KIT_PRICE_COLUMNS = 'kit_type, kit_label, unit_price';
 const DELIVERY_COLUMNS = 'id, name, price';
 
 /**
- * Index: uq_kit_price (kit_type) — unique, const access, one dive.
- *
- * is_active = 1 is in the WHERE clause so a retired price is unpriceable rather than quietly
- * still sellable. A missing row and a deactivated row are deliberately indistinguishable here;
- * the service turns both into the same error.
+ * The single-type lookup `findKitPrice` was deleted with computePricing on 2026-08-13 — that was
+ * its only caller. Everything now goes through the batched form below, which is the right default
+ * anyway: one round trip for a whole cart rather than one per line (CLAUDE.md rule 13).
  */
-export async function findKitPrice(kitType, db = pool) {
-  const [rows] = await db.execute(
-    `SELECT ${KIT_PRICE_COLUMNS} FROM kit_prices WHERE kit_type = ? AND is_active = 1 LIMIT 1`,
-    [kitType],
-  );
-  return rows[0] ?? null;
-}
 
 /**
- * Batched sibling of findKitPrice, for pricing a multi-line cart in ONE round trip.
- * A `for` loop of `await findKitPrice()` over cart lines would violate CLAUDE.md rule 13.
+ * Prices a multi-line cart in ONE round trip.
+ *
+ * `is_active = 1` is in the WHERE clause so a retired price is unpriceable rather than quietly
+ * still sellable.
  *
  * ┌─ THE CALLER MUST CHECK FOR MISSES ────────────────────────────────────────────────────────┐
  * │ Returns AT MOST one entry per requested type. `IN (?)` returns only the rows that matched, │
@@ -41,8 +34,8 @@ export async function findKitPrice(kitType, db = pool) {
  * │ the 409).                                                                                  │
  * └───────────────────────────────────────────────────────────────────────────────────────────┘
  *
- * A deactivated type and a nonexistent one are deliberately indistinguishable, exactly as in
- * findKitPrice.
+ * A deactivated type and a nonexistent one are deliberately indistinguishable; the service turns
+ * both into the same error.
  *
  * Index: uq_kit_price (kit_type) — unique, so this is a short list of const lookups, not a scan.
  *

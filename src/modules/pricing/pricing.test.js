@@ -1,5 +1,5 @@
 import { describe, it, expect, afterAll } from 'vitest';
-import { computePricing, computeCartPricing } from './pricing.service.js';
+import { computeCartPricing } from './pricing.service.js';
 import { MAX_CART_ITEMS } from './pricing.constants.js';
 import { pool, closePool } from '../../db/pool.js';
 import { env } from '../../config/env.js';
@@ -13,172 +13,90 @@ describe('test environment', () => {
   });
 });
 
-const BASE = { kitType: 'jersey', template: 'solid', sport: 'football', deliveryId: 'express' };
-
 afterAll(async () => {
   await closePool();
-});
-
-describe('computePricing — the worked example', () => {
-  it('prices 11 jerseys with express delivery at exactly 31300', async () => {
-    const p = await computePricing({ ...BASE, totalKits: 11 });
-
-    // The full object from docs/API_CONTRACT.md, field for field.
-    expect(p).toEqual({
-      unitPrice: 2800,
-      kitLabel: 'Jersey',
-      templateName: 'Solid',
-      sportLabel: 'Football',
-      kitPrice: 30800,
-      deliveryName: 'Express Delivery',
-      deliveryPrice: 500,
-      discount: 0,
-      total: 31300,
-    });
-  });
-
-  it('returns whole PKR integers for every money field', async () => {
-    const p = await computePricing({ ...BASE, totalKits: 11 });
-    for (const field of ['unitPrice', 'kitPrice', 'deliveryPrice', 'discount', 'total']) {
-      expect(Number.isSafeInteger(p[field]), `${field} must be a safe integer`).toBe(true);
-      expect(p[field] % 1, `${field} must have no fractional part`).toBe(0);
-    }
-  });
-
-  it('applies the discount to kitPrice before adding delivery, not to the grand total', async () => {
-    const p = await computePricing({ ...BASE, totalKits: 11 });
-    expect(p.total).toBe(p.kitPrice - p.discount + p.deliveryPrice);
-    expect(p.discount).toBe(0); // promo codes are out of scope
-  });
-});
-
-describe('computePricing — pricing comes from the database, not the client', () => {
-  it('prices each kit type from its own kit_prices row', async () => {
-    const expected = { jersey: 2800, polo: 2600, jumper: 3200, shorts: 1500, socks: 600, cap: 1200 };
-    for (const [kitType, unitPrice] of Object.entries(expected)) {
-      const p = await computePricing({ ...BASE, kitType, totalKits: 10 });
-      expect(p.unitPrice, kitType).toBe(unitPrice);
-      expect(p.kitPrice, kitType).toBe(unitPrice * 10);
-    }
-  });
-
-  it('treats standard delivery as free without special-casing it', async () => {
-    const p = await computePricing({ ...BASE, deliveryId: 'standard', totalKits: 10 });
-    expect(p.deliveryPrice).toBe(0);
-    expect(p.deliveryName).toBe('Standard Delivery');
-    expect(p.total).toBe(p.kitPrice);
-  });
-
-  it('ignores template when pricing — it is a display label only', async () => {
-    const solid = await computePricing({ ...BASE, template: 'solid', totalKits: 10 });
-    const chevron = await computePricing({ ...BASE, template: 'chevron', totalKits: 10 });
-    expect(chevron.total).toBe(solid.total);
-    expect(chevron.templateName).toBe('Chevron');
-  });
-});
-
-describe('computePricing — rejects what it cannot price', () => {
-  it('rejects an unknown kitType instead of falling back to a jersey', async () => {
-    await expect(computePricing({ ...BASE, kitType: 'tracksuit', totalKits: 11 }))
-      .rejects.toMatchObject({ statusCode: 422, code: 'PRICING_UNKNOWN_KIT_TYPE' });
-  });
-
-  it('rejects an invalid deliveryId instead of falling back to free standard shipping', async () => {
-    await expect(computePricing({ ...BASE, deliveryId: 'teleport', totalKits: 11 }))
-      .rejects.toMatchObject({ statusCode: 422, code: 'PRICING_UNKNOWN_DELIVERY' });
-  });
-
-  it('refuses to price a deactivated kit type', async () => {
-    await pool.execute("UPDATE kit_prices SET is_active = 0 WHERE kit_type = 'socks'");
-    try {
-      await expect(computePricing({ ...BASE, kitType: 'socks', totalKits: 11 }))
-        .rejects.toMatchObject({ code: 'PRICING_UNKNOWN_KIT_TYPE' });
-    } finally {
-      await pool.execute("UPDATE kit_prices SET is_active = 1 WHERE kit_type = 'socks'");
-    }
-  });
-});
-
-describe('computePricing — totalKits bounds', () => {
-  it('accepts the lower bound of 5', async () => {
-    const p = await computePricing({ ...BASE, totalKits: 5 });
-    expect(p.kitPrice).toBe(2800 * 5);
-    expect(p.total).toBe(14000 + 500);
-  });
-
-  it('accepts the upper bound of 500 and stays a safe integer', async () => {
-    const p = await computePricing({ ...BASE, totalKits: 500 });
-    expect(p.kitPrice).toBe(1_400_000);
-    expect(p.total).toBe(1_400_500);
-    expect(Number.isSafeInteger(p.total)).toBe(true);
-  });
-
-  it('stays within INT UNSIGNED at the most expensive possible order', async () => {
-    // jumper (3200) x 500 + international (3500) — the largest total the bounds permit.
-    const p = await computePricing({
-      ...BASE, kitType: 'jumper', deliveryId: 'international', totalKits: 500,
-    });
-    expect(p.total).toBe(1_603_500);
-    expect(p.total).toBeLessThan(4_294_967_295); // INT UNSIGNED max
-  });
-
-  it.each([4, 0, -1, 501, 1000])('rejects totalKits = %i', async (totalKits) => {
-    await expect(computePricing({ ...BASE, totalKits }))
-      .rejects.toMatchObject({ statusCode: 422, code: 'PRICING_INVALID_QUANTITY' });
-  });
-
-  it.each([11.5, NaN, '11', null, undefined])('rejects non-integer totalKits (%s)', async (totalKits) => {
-    await expect(computePricing({ ...BASE, totalKits }))
-      .rejects.toMatchObject({ code: 'PRICING_INVALID_QUANTITY' });
-  });
 });
 
 const cartItem = (over = {}) => ({
   kitType: 'jersey', template: 'solid', sport: 'football', size: 'M', quantity: 11, ...over,
 });
 
-describe('computeCartPricing — equivalence with computePricing', () => {
-  const KIT_TYPES = ['jersey', 'polo', 'jumper', 'shorts', 'socks', 'cap'];
-  const DELIVERIES = ['standard', 'express', 'rush', 'international'];
-  const QUANTITIES = [5, 11, 500];
+/**
+ * ┌─ PORTED FROM THE DELETED computePricing SUITE (2026-08-13) ───────────────────────────────────┐
+ * │ computePricing and its 72-case equivalence matrix went with the legacy order path in Phase 5. │
+ * │ The matrix could not be kept: its expected values were produced BY computePricing, so with    │
+ * │ that function gone it had nothing to compare against.                                         │
+ * │                                                                                               │
+ * │ These five are the assertions it had that no computeCartPricing test covered. They are        │
+ * │ hand-written literals rather than a characterization, which is the right form now that there  │
+ * │ is one implementation instead of two being held level.                                        │
+ * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+ */
+describe('computeCartPricing — the worked example and the price table', () => {
+  it('prices 11 jerseys with express delivery at exactly 31300', async () => {
+    const cart = await computeCartPricing({ items: [cartItem()], deliveryId: 'express' });
 
-  // CHARACTERIZATION TEST. Expected values are produced by computePricing itself, never
-  // hand-written — so this asserts the two paths AGREE rather than asserting today's numbers.
-  // If either implementation drifts the test fails; if the price table changes it still passes.
-  const cases = KIT_TYPES.flatMap((kitType) =>
-    DELIVERIES.flatMap((deliveryId) =>
-      QUANTITIES.map((quantity) => ({ kitType, deliveryId, quantity }))));
+    // The worked example from docs/API_CONTRACT.md, field for field, now in the cart shape: the
+    // per-design figures sit on the line and the money totals on the cart.
+    expect(cart).toMatchObject({
+      totalKits: 11,
+      kitPrice: 30800,
+      deliveryName: 'Express Delivery',
+      deliveryPrice: 500,
+      discount: 0,
+      total: 31300,
+    });
+    expect(cart.items).toHaveLength(1);
+    expect(cart.items[0]).toMatchObject({
+      position: 1,
+      unitPrice: 2800,
+      kitLabel: 'Jersey',
+      templateName: 'Solid',
+      sportLabel: 'Football',
+      lineTotal: 30800,
+    });
+  });
 
-  it.each(cases)(
-    'single-item cart matches computePricing: $kitType x$quantity via $deliveryId',
-    async ({ kitType, deliveryId, quantity }) => {
-      const single = await computePricing({
-        kitType, template: 'solid', sport: 'football', totalKits: quantity, deliveryId,
-      });
+  it('prices each kit type from its own kit_prices row', async () => {
+    const expected = { jersey: 2800, polo: 2600, jumper: 3200, shorts: 1500, socks: 600, cap: 1200 };
+    for (const [kitType, unitPrice] of Object.entries(expected)) {
       const cart = await computeCartPricing({
-        items: [cartItem({ kitType, quantity })], deliveryId,
+        items: [cartItem({ kitType, quantity: 10 })], deliveryId: 'express',
       });
+      expect(cart.items[0].unitPrice, kitType).toBe(unitPrice);
+      expect(cart.kitPrice, kitType).toBe(unitPrice * 10);
+    }
+  });
 
-      // Cart-level figures must be identical.
-      expect(cart.kitPrice).toBe(single.kitPrice);
-      expect(cart.deliveryName).toBe(single.deliveryName);
-      expect(cart.deliveryPrice).toBe(single.deliveryPrice);
-      expect(cart.discount).toBe(single.discount);
-      expect(cart.total).toBe(single.total);
-      expect(cart.totalKits).toBe(quantity);
+  it('treats standard delivery as free without special-casing it', async () => {
+    const cart = await computeCartPricing({
+      items: [cartItem({ quantity: 10 })], deliveryId: 'standard',
+    });
+    expect(cart.deliveryPrice).toBe(0);
+    expect(cart.deliveryName).toBe('Standard Delivery');
+    expect(cart.total).toBe(cart.kitPrice);
+  });
 
-      // Per-design figures move from the top level onto the line, but keep their values.
-      expect(cart.items).toHaveLength(1);
-      expect(cart.items[0]).toMatchObject({
-        position: 1,
-        unitPrice: single.unitPrice,
-        kitLabel: single.kitLabel,
-        templateName: single.templateName,
-        sportLabel: single.sportLabel,
-        lineTotal: single.kitPrice,
-      });
-    },
-  );
+  it('ignores template when pricing — it is a display label only', async () => {
+    const solid = await computeCartPricing({
+      items: [cartItem({ template: 'solid', quantity: 10 })], deliveryId: 'express',
+    });
+    const chevron = await computeCartPricing({
+      items: [cartItem({ template: 'chevron', quantity: 10 })], deliveryId: 'express',
+    });
+    expect(chevron.total).toBe(solid.total);
+    expect(chevron.items[0].templateName).toBe('Chevron');
+  });
+
+  it('stays within INT UNSIGNED at the most expensive possible order', async () => {
+    // jumper (3200) x 500 + international (3500) — the largest total the bounds permit.
+    const cart = await computeCartPricing({
+      items: [cartItem({ kitType: 'jumper', quantity: 500 })], deliveryId: 'international',
+    });
+    expect(cart.total).toBe(1_603_500);
+    expect(cart.total).toBeLessThan(4_294_967_295); // INT UNSIGNED max
+    expect(Number.isSafeInteger(cart.total)).toBe(true);
+  });
 });
 
 describe('computeCartPricing — multi-line arithmetic', () => {
