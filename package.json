@@ -13,7 +13,8 @@
     "prepare": "git config core.hooksPath .githooks || exit 0",
     "check:seeds": "node scripts/check-seeds.mjs",
     "sync:reference": "node scripts/sync-reference.mjs",
-    "test": "vitest run"
+    "test": "vitest run",
+    "ci": "node scripts/ci.mjs"
   },
   "keywords": [],
   "author": "",

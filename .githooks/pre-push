@@ -1,0 +1,92 @@
+#!/bin/sh
+#
+# Runs the full CI gate before a push, and refuses a direct push to an integration branch.
+#
+# Installed via core.hooksPath (see the `prepare` script in package.json), so it lives in the repo
+# and survives a clone, unlike .git/hooks.
+#
+# ┌─ DORMANT TODAY, ON PURPOSE ───────────────────────────────────────────────────────────────────┐
+# │ There is no remote yet, so `git push` has nothing to push to and this never runs. It is here  │
+# │ so that the day a remote is added, the gate is already in place rather than being remembered  │
+# │ — and it DOES fire today for a push to a local path or bare repo.                             │
+# │                                                                                               │
+# │ Until then the real entry point is `npm run ci`, run by hand before a merge. See docs/ci.md.  │
+# └───────────────────────────────────────────────────────────────────────────────────────────────┘
+#
+# Deliberately NOT in pre-commit. The full run is ~35s; charging that to every commit teaches
+# people to reach for --no-verify, which would also disable the SQL and mirror checks that hook
+# exists for. Commits stay fast; the gate sits at the push.
+
+set -e
+
+# ── 1. No direct pushes to an integration branch ─────────────────────────────
+#
+# git feeds pre-push one line per ref on stdin:  <local ref> <local sha> <remote ref> <remote sha>
+#
+# ┌─ WHY AN EXPLICIT OPT-OUT AND NOT A --force CHECK ─────────────────────────────────────────────┐
+# │ git tells a pre-push hook NOTHING about --force. There is no flag, no environment variable    │
+# │ and no stdin field for it; a forced push and an ordinary one are indistinguishable here. So    │
+# │ "unless forced" is implemented as an explicit, greppable opt-out rather than something that   │
+# │ looks like it detects force and silently does not.                                            │
+# └───────────────────────────────────────────────────────────────────────────────────────────────┘
+#
+# Both names are listed because the two repos disagree: kit-backend is on `master`, kit-frontend on
+# `main`, and both are that repo's integration branch. Edit this list, not the logic.
+PROTECTED="main master"
+ZERO="0000000000000000000000000000000000000000"
+
+# stdin is consumed here, so anything below cannot read it again.
+refs=$(cat)
+
+if [ "${ALLOW_PROTECTED_PUSH:-}" != "1" ]; then
+  echo "$refs" | while read -r _local_ref local_sha remote_ref _remote_sha; do
+    [ -z "$remote_ref" ] && continue
+
+    branch=${remote_ref#refs/heads/}
+    for protected in $PROTECTED; do
+      if [ "$branch" = "$protected" ]; then
+        # A deletion (all-zero local sha) is not a code change; let it through.
+        [ "$local_sha" = "$ZERO" ] && continue
+
+        echo ""
+        echo "pre-push: BLOCKED — direct push to '$branch'."
+        echo ""
+        echo "  Push a branch and merge it once 'npm run ci' is green, rather than pushing"
+        echo "  straight to the branch everything else is built on."
+        echo ""
+        echo "  If you meant it:  ALLOW_PROTECTED_PUSH=1 git push ..."
+        echo "  (--no-verify also works, but skips the CI run below as well.)"
+        echo ""
+        exit 1
+      fi
+    done
+  done || exit 1
+fi
+
+# ── 2. The full CI gate ──────────────────────────────────────────────────────
+#
+# THE SINGLE-REPO CLONE, same rule as the pre-commit hooks: a hook that bricks a push for a valid
+# setup is worse than no hook. Without the sibling, two of the four gates (the reference mirror
+# check and the frontend suite) cannot run — so degrade to this repo's own tests and SAY SO, rather
+# than either failing or pretending a partial run was the full one.
+FRONTEND="$(dirname "$0")/../../kit-frontend"
+
+if [ -d "$FRONTEND" ]; then
+  echo "pre-push: running full CI (both repos) — see docs/ci.md"
+  if ! npm run --silent ci; then
+    echo ""
+    echo "pre-push: BLOCKED — CI failed. Fix it, or bypass with 'git push --no-verify'."
+    exit 1
+  fi
+else
+  echo "pre-push: kit-frontend not found alongside this repo — running backend tests only."
+  echo "  SKIPPED: the reference-mirror check and the frontend suite. This is a PARTIAL gate;"
+  echo "  run 'npm run ci' with both repos present before merging."
+  if ! npm test; then
+    echo ""
+    echo "pre-push: BLOCKED — backend tests failed."
+    exit 1
+  fi
+fi
+
+exit 0
