@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { MIN_TOTAL_KITS, MAX_TOTAL_KITS, MAX_CART_ITEMS } from '../pricing/pricing.constants.js';
+import { MAX_TOTAL_KITS, MAX_CART_ITEMS } from '../pricing/pricing.constants.js';
 import {
   SHIPPING_COUNTRIES, DOMESTIC_COUNTRY, allowedDeliveryIds, isDeliveryAllowedForCountry,
 } from './orders.constants.js';
@@ -112,16 +112,23 @@ const SIZES = ['S', 'M', 'L', 'XL', 'Custom'];
 /** One cart line: a design, the size ordered, and how many. */
 const cartItemSchema = z.object({
   design: designSchema,
-  // The authoritative ordered size. `design.size` is part of the design snapshot and is
-  // deliberately NOT cross-checked against this — exactly as `primarySize` and `design.size`
-  // already relate on the legacy path. Checking one shape and not the other is the inconsistency.
+  // The authoritative ordered size, and the one that reaches order_items.size. `design.size` is
+  // part of the design SNAPSHOT — what the customizer had selected when the line was added — and
+  // is deliberately not cross-checked against this. They answer different questions, and a design
+  // reused across two sizes is a normal cart, not a contradiction.
   size: z.enum(SIZES),
   // Per line, the floor is 1. The 5-kit minimum is CART-WIDE and is enforced in
   // computeCartPricing, so 3 jerseys + 2 shorts is a valid order.
   quantity: z.coerce.number().int().min(1).max(MAX_TOTAL_KITS),
 }).strict();
 
-/** Fields both payload shapes share. Extended, never merged, so each branch keeps its own strict(). */
+/**
+ * The order payload, minus `items`.
+ *
+ * Kept as a separate object rather than inlined because `.strict()` has to be applied to the
+ * FINAL shape — extending a strict object and re-striking it is the only way to add `items` and
+ * still reject unknown keys. Until Phase 5 there was a second branch extending this too.
+ */
 const baseOrder = z.object({
   contact: z.object({
     firstName: z.string().trim().min(1).max(60),
@@ -156,7 +163,7 @@ const baseOrder = z.object({
  *
  * Enforced here, not only in the UI, because the UI constraint is bypassable by a crafted request
  * — and the failure mode is a free domestic courier rate on an international address, which is
- * unfulfillable and a direct revenue loss. Shared by both branches so they cannot drift.
+ * unfulfillable and a direct revenue loss.
  */
 function deliveryMatchesCountry(order, ctx) {
   if (!isDeliveryAllowedForCountry(order.address.country, order.deliveryId)) {
@@ -172,59 +179,26 @@ function deliveryMatchesCountry(order, ctx) {
   }
 }
 
-/** The multi-item shape the cart sends. */
-const cartOrderSchema = baseOrder.extend({
+/**
+ * The multi-item shape the cart sends — the ONLY shape accepted, since Phase 5.
+ *
+ * ┌─ THE LEGACY SINGLE-DESIGN BRANCH WAS REMOVED ON 2026-08-13 ───────────────────────────────────┐
+ * │ Until then a body of `{ design, totalKits, primarySize }` was accepted and normalised into a  │
+ * │ one-item cart by a hand-written router (deliberately not z.union, whose `invalid_union`       │
+ * │ issue reports a useless "Invalid input"). The frontend has sent `items[]` since Phase 4, and  │
+ * │ browser verification confirmed it end to end, so the branch had no callers left.              │
+ * │                                                                                               │
+ * │ A legacy body now fails HERE, as unrecognized keys plus a missing `items` — which is the       │
+ * │ correct outcome and is asserted by a test. Do not add a compatibility shim: the columns those  │
+ * │ payloads wrote (design_json, unit_price, primary_size) were dropped in migration 008, so an    │
+ * │ accepted legacy order would have nowhere to put half of itself.                                │
+ * └───────────────────────────────────────────────────────────────────────────────────────────────┘
+ */
+export const createOrderSchema = baseOrder.extend({
   items: z.array(cartItemSchema)
     .min(1, 'Your cart is empty.')
     .max(MAX_CART_ITEMS, `A cart can hold at most ${MAX_CART_ITEMS} designs.`),
 }).strict().superRefine(deliveryMatchesCountry);
-
-/**
- * Turns the single-design payload into a one-item cart, so the service has ONE code path.
- *
- * `legacyShape` is derived HERE, by the parser, and is never accepted from the body — both
- * branches are .strict() and neither declares it, so a client sending `legacyShape: true` is
- * rejected as an unrecognized key. That matters: it decides whether the singular columns
- * (design_json, unit_price, primary_size) get written, and a client-controlled switch over which
- * columns a row gets is not something to leave reachable.
- */
-function legacyToCart({ design, totalKits, primarySize, ...rest }) {
-  return {
-    ...rest,
-    items: [{ design, size: primarySize, quantity: totalKits }],
-    legacyShape: true,
-  };
-}
-
-/** The original single-design shape. Accepted until the frontend has moved (Phase 5 removes it). */
-const legacyOrderSchema = baseOrder.extend({
-  design: designSchema,
-  totalKits: z.coerce.number().int().min(MIN_TOTAL_KITS).max(MAX_TOTAL_KITS),
-  primarySize: z.enum(SIZES),
-}).strict().superRefine(deliveryMatchesCountry).transform(legacyToCart);
-
-/**
- * ┌─ A ROUTER, NOT z.union — DO NOT "SIMPLIFY" THIS ──────────────────────────────────────────────┐
- * │ z.union([cart, legacy]) emits a single `invalid_union` issue whose message is "Invalid        │
- * │ input" when both branches fail; the useful per-branch detail is buried in `unionErrors`,      │
- * │ which validate.js does not read. Every malformed order would report "Invalid input" — the     │
- * │ exact bug fixed in fb339b1, on the most important endpoint in the app.                        │
- * │                                                                                               │
- * │ Routing first means failures report the real problem from the branch the caller meant. There  │
- * │ is a test asserting that a body carrying BOTH `items` and `design` names the unrecognized     │
- * │ key; swapping this for z.union passes a status-only test and fails that one.                  │
- * └───────────────────────────────────────────────────────────────────────────────────────────────┘
- *
- * validate() only ever calls .safeParse, so this is a drop-in for a zod schema. Both branches stay
- * independently .strict(): a body with `items` AND `design` routes to cart, where `design`,
- * `totalKits` and `primarySize` are unrecognized — it cannot satisfy both shapes.
- */
-export const createOrderSchema = {
-  safeParse(value) {
-    const isCart = value !== null && typeof value === 'object' && 'items' in value;
-    return isCart ? cartOrderSchema.safeParse(value) : legacyOrderSchema.safeParse(value);
-  },
-};
 
 /**
  * POST /orders/quote — price a cart in progress. Creates nothing.

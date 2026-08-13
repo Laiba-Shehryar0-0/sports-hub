@@ -1,11 +1,15 @@
 import { pool } from '../../db/pool.js';
 
 /**
- * Columns are listed explicitly everywhere. Never SELECT * on orders — it carries three JSON
- * blobs, and design_json in particular has no business travelling to a list endpoint.
+ * Columns are listed explicitly everywhere. Never SELECT * on orders — it carries two JSON blobs,
+ * and neither contact_json nor address_json has any business travelling to a list endpoint.
+ *
+ * `unit_price` and `primary_size` were removed from this list in Phase 5, with the columns
+ * themselves (migration 008). Selecting a dropped column is an ER_BAD_FIELD_ERROR on every read,
+ * so this string and that migration had to move together.
  */
-const ORDER_SUMMARY_COLUMNS = `id, reference, status, unit_price, kit_price, delivery_price,
-  discount, total_price, delivery_id, payment_id, total_kits, primary_size`;
+const ORDER_SUMMARY_COLUMNS = `id, reference, status, kit_price, delivery_price,
+  discount, total_price, delivery_id, payment_id, total_kits`;
 
 /**
  * Inserts the order. `reference` is derived from the auto-increment id, which does not exist
@@ -18,27 +22,20 @@ const ORDER_SUMMARY_COLUMNS = `id, reference, status, unit_price, kit_price, del
 export async function insertOrder(order, db = pool) {
   const [result] = await db.execute(
     `INSERT INTO orders
-       (reference, user_id, design_json, contact_json, address_json, delivery_id, payment_id,
-        total_kits, primary_size, instructions,
-        unit_price, kit_price, delivery_price, discount, total_price, idempotency_key)
-     VALUES ('', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (reference, user_id, contact_json, address_json, delivery_id, payment_id,
+        total_kits, instructions,
+        kit_price, delivery_price, discount, total_price, idempotency_key)
+     VALUES ('', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       order.userId,
-      // Nullable since migration 007. `? :` rather than JSON.stringify(null), which yields the
-      // STRING "null" and would store a JSON null instead of a SQL NULL — the two are different
-      // and only the second is what `WHERE design_json IS NULL` finds.
-      order.design ? JSON.stringify(order.design) : null,
       JSON.stringify(order.contact),
       JSON.stringify(order.address),
       order.deliveryId,
       order.paymentId,
-      // NOT NULL, and meaningful for both shapes: the summed quantity across every line.
+      // The summed quantity across every line — the cart-level aggregate, which stays NOT NULL.
+      // The per-design figures live on order_items, one row per line, since migration 007.
       order.totalKits,
-      // Nullable since 007: a multi-line cart has no single size or unit price. Populated only
-      // for a legacy body, so the existing order tests keep asserting what they assert today.
-      order.primarySize ?? null,
       order.instructions || null,
-      order.pricing.unitPrice ?? null,
       order.pricing.kitPrice,
       order.pricing.deliveryPrice,
       order.pricing.discount,
@@ -95,8 +92,8 @@ export async function insertOrderItems(orderId, items, db = pool) {
  * position the second, so this one index serves both the filter and the ordering. No filesort.
  *
  * design_json is selected because the replay rebuilds the per-line template and sport labels from
- * it. This is a single-order read, not a list endpoint, so carrying the JSON is proportionate —
- * unlike on orders, where design_json must never travel to a list.
+ * it. This is a single-order read, not a list endpoint, so carrying the JSON is proportionate; a
+ * future list endpoint must not copy this SELECT.
  */
 export async function findItemsByOrderId(orderId, db = pool) {
   const [rows] = await db.execute(
@@ -130,18 +127,11 @@ export async function findByIdempotencyKey(key, db = pool) {
   return rows[0] ?? null;
 }
 
-/** Index: uq_order_ref (reference). Ownership is applied by the caller via the WHERE clause. */
-export async function findByReference(reference, userId = null, db = pool) {
-  // Ownership goes in the WHERE clause, never a fetch-then-check in JS (CLAUDE.md rule 6).
-  // A guest order (user_id NULL) is only reachable without a user context.
-  const [rows] = userId === null
-    ? await db.execute(
-      `SELECT ${ORDER_SUMMARY_COLUMNS} FROM orders WHERE reference = ? AND user_id IS NULL LIMIT 1`,
-      [reference],
-    )
-    : await db.execute(
-      `SELECT ${ORDER_SUMMARY_COLUMNS} FROM orders WHERE reference = ? AND user_id = ? LIMIT 1`,
-      [reference, userId],
-    );
-  return rows[0] ?? null;
-}
+/**
+ * `findByReference` was deleted in Phase 5 (2026-08-13). It had no callers — it was written in
+ * anticipation of GET /orders/:reference, which is still not in scope — and it selected two
+ * columns migration 008 dropped, so keeping it meant maintaining dead SQL. When order history
+ * lands it wants writing against the schema of that day, including the ownership WHERE clause
+ * (CLAUDE.md rule 6) that this one already had: `WHERE reference = ? AND user_id = ?`, 404 not
+ * 403 when it is not the caller's.
+ */

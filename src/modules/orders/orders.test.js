@@ -12,35 +12,49 @@ import { storeFromDataUrl } from '../assets/assets.service.js';
 
 const app = createApp();
 
-/** A complete, valid payload — the DEFAULT_DESIGN shape the customizer actually sends. */
-function validOrder(overrides = {}) {
+/** One design — the DEFAULT_DESIGN shape the customizer actually sends. */
+function baseDesign(overrides = {}) {
   return {
-    design: {
-      kitType: 'jersey', kitProduct: 'Football Jersey', sport: 'football', template: 'solid',
-      size: 'M', customSize: '', customSizeUnit: 'in',
-      bodyColor: '#CC0000', sleeveColor: '#1a1a1a', numberColor: '#FFFFFF', collarColor: '#1a1a1a',
-      opacity: { body: 100, sleeves: 100, number: 100, collar: 100 },
-      playerName: { front: 'SMITH', back: '' },
-      playerNumber: { front: '10', back: '' },
-      font: 'Bebas Neue', nameSize: 14, numberSize: 46,
-      textPosition: { x: 0.5, y: 0.38 }, numberPosition: { x: 0.5, y: 0.58 },
-      logoDataUrl: null, logoPreset: null, logoScale: 80, logoOpacity: 100,
-      logoPosition: { x: 0.28, y: 0.22 },
-      layers: { body: true, sleeves: true, number: true, name: true, logo: true },
-      layerOrder: ['number', 'name', 'logo', 'sleeves', 'body'],
-      ...overrides.design,
-    },
+    kitType: 'jersey', kitProduct: 'Football Jersey', sport: 'football', template: 'solid',
+    size: 'M', customSize: '', customSizeUnit: 'in',
+    bodyColor: '#CC0000', sleeveColor: '#1a1a1a', numberColor: '#FFFFFF', collarColor: '#1a1a1a',
+    opacity: { body: 100, sleeves: 100, number: 100, collar: 100 },
+    playerName: { front: 'SMITH', back: '' },
+    playerNumber: { front: '10', back: '' },
+    font: 'Bebas Neue', nameSize: 14, numberSize: 46,
+    textPosition: { x: 0.5, y: 0.38 }, numberPosition: { x: 0.5, y: 0.58 },
+    logoDataUrl: null, logoPreset: null, logoScale: 80, logoOpacity: 100,
+    logoPosition: { x: 0.28, y: 0.22 },
+    layers: { body: true, sleeves: true, number: true, name: true, logo: true },
+    layerOrder: ['number', 'name', 'logo', 'sleeves', 'body'],
+    ...overrides,
+  };
+}
+
+/**
+ * A complete, valid payload: ONE line of 11 jerseys, priced at 31300 with express delivery.
+ *
+ * Until Phase 5 this returned the legacy `{ design, totalKits, primarySize }` body and was the
+ * default fixture for most of this suite. It now returns the cart shape with a single line, which
+ * keeps every call site that only cared about "a valid order" — country rules, logo handling,
+ * idempotency, validation — asserting exactly what it asserted before, against the only shape the
+ * API still accepts. The 31300 figure is unchanged, which is the point: 11 jerseys cost the same
+ * whichever shape asked.
+ */
+function validOrder({ design, contact, address, root, size = 'M', quantity = 11 } = {}) {
+  return {
+    items: [{ design: baseDesign(design), size, quantity }],
     contact: {
       firstName: 'Jane', lastName: 'Doe', email: 'jane@example.com',
       phone: '+92 300 1234567', clubName: '',
-      ...overrides.contact,
+      ...contact,
     },
     address: {
       street: '12 Mall Road', city: 'Lahore', province: '', postalCode: '', country: 'Pakistan',
-      ...overrides.address,
+      ...address,
     },
-    deliveryId: 'express', paymentId: 'cod', totalKits: 11, primarySize: 'M', instructions: '',
-    ...overrides.root,
+    deliveryId: 'express', paymentId: 'cod', instructions: '',
+    ...root,
   };
 }
 
@@ -89,14 +103,13 @@ afterAll(async () => {
   await closePool();
 });
 
-/** The same payload as validOrder, in the multi-item cart shape: 6 jerseys + 5 shorts. */
+/** The same 11 kits as validOrder, split across two lines: 6 jerseys + 5 shorts. */
 function cartOrder(overrides = {}) {
-  const { design, totalKits, primarySize, ...rest } = validOrder();
   return {
-    ...rest,
+    ...validOrder(),
     items: [
-      { design, size: 'M', quantity: 6 },
-      { design: { ...design, kitType: 'shorts', kitProduct: 'Football Shorts' }, size: 'L', quantity: 5 },
+      { design: baseDesign(), size: 'M', quantity: 6 },
+      { design: baseDesign({ kitType: 'shorts', kitProduct: 'Football Shorts' }), size: 'L', quantity: 5 },
     ],
     ...overrides,
   };
@@ -152,8 +165,9 @@ describe('POST /api/orders — cart shape', () => {
   });
 
   /**
-   * RULE 2 ON THE PATH A CLIENT WOULD ACTUALLY USE. The legacy equivalent has been covered since
-   * the orders module was built; the cart shape is the new attack surface and had none.
+   * RULE 2 ACROSS SEVERAL LINES. The single-line equivalent lives under "the client never sets the
+   * price" below; this one exists because a multi-line cart has more places for a tampered figure
+   * to land — the header total, and every line's own money.
    */
   it('ignores a tampered pricing object on the cart shape and charges the real total', async () => {
     const res = await request(app).post('/api/orders').send(cartOrder({
@@ -180,59 +194,47 @@ describe('POST /api/orders — cart shape', () => {
 
   it('rejects a cart whose lines total fewer than 5 kits', async () => {
     const res = await request(app).post('/api/orders').send(cartOrder({
-      items: [{ design: validOrder().design, size: 'M', quantity: 2 }],
+      items: [{ design: baseDesign(), size: 'M', quantity: 2 }],
     }));
     expect(res.status).toBe(422);
   });
 });
 
 /**
- * THE PHASE 5 PRECONDITION, as a pair. Either half alone proves nothing: that a cart order leaves
- * the singular columns NULL is only meaningful if a legacy order still fills them, and vice versa.
+ * A one-line cart is not a special case. It takes the same path as a twenty-line one and writes
+ * one row to order_items, not a shortcut back into the singular columns migration 008 dropped.
  */
-describe('POST /api/orders — the singular columns', () => {
-  it('a cart order leaves design_json, unit_price and primary_size NULL', async () => {
-    const res = await request(app).post('/api/orders').send(cartOrder());
-    const [[row]] = await pool.execute(
-      'SELECT design_json, unit_price, primary_size FROM orders WHERE id = ?', [res.body.id],
-    );
-
-    // SQL NULL, not a JSON null — JSON.stringify(null) would have stored the string "null" and
-    // this assertion is what catches that.
-    expect(row.design_json).toBeNull();
-    expect(row.unit_price).toBeNull();
-    expect(row.primary_size).toBeNull();
-  });
-
-  it('a legacy order still populates all three', async () => {
-    const res = await request(app).post('/api/orders').send(validOrder());
-    const [[row]] = await pool.execute(
-      'SELECT design_json, unit_price, primary_size FROM orders WHERE id = ?', [res.body.id],
-    );
-
-    expect(row.design_json).not.toBeNull();
-    expect(row.design_json.kitType).toBe('jersey');   // mysql2 parses JSON columns
-    expect(row.unit_price).toBe(2800);
-    expect(row.primary_size).toBe('M');
-  });
-
-  it('a legacy order still writes exactly one line', async () => {
+describe('POST /api/orders — a single-line cart', () => {
+  it('writes exactly one line, with the design and money on it', async () => {
     const res = await request(app).post('/api/orders').send(validOrder());
     expect(await countItems(res.body.id)).toBe(1);
 
     const [[line]] = await pool.execute(
-      'SELECT position, quantity, size, unit_price, line_total FROM order_items WHERE order_id = ?',
+      `SELECT position, quantity, size, kit_type, unit_price, line_total, design_json
+       FROM order_items WHERE order_id = ?`,
       [res.body.id],
     );
-    expect(line).toMatchObject({ position: 1, quantity: 11, size: 'M', unit_price: 2800, line_total: 30800 });
+    expect(line).toMatchObject({
+      position: 1, quantity: 11, size: 'M', kit_type: 'jersey',
+      unit_price: 2800, line_total: 30800,
+    });
+    // mysql2 parses JSON columns already — never JSON.parse them.
+    expect(line.design_json.kitType).toBe('jersey');
+  });
+
+  it('returns the same per-line pricing shape as a multi-line cart', async () => {
+    const res = await request(app).post('/api/orders').send(validOrder());
+    expect(res.body.pricing.items).toHaveLength(1);
+    expect(res.body.pricing.items[0]).toMatchObject({ position: 1, unitPrice: 2800, lineTotal: 30800 });
+    expect(res.body.pricing.totalKits).toBe(11);
   });
 });
 
 describe('POST /api/orders — idempotent replay inserts no duplicate lines', () => {
   it.each([
-    ['cart', cartOrder, 2],
-    ['legacy', validOrder, 1],
-  ])('%s shape: the same key returns the original order and no extra lines', async (_label, build, expectedLines) => {
+    ['two-line', cartOrder, 2],
+    ['one-line', validOrder, 1],
+  ])('%s cart: the same key returns the original order and no extra lines', async (_label, build, expectedLines) => {
     const key = randomUUID();
     const body = build();
 
@@ -267,28 +269,46 @@ describe('POST /api/orders — idempotent replay inserts no duplicate lines', ()
   });
 });
 
-describe('POST /api/orders — payload routing', () => {
-  it('rejects a body carrying BOTH items and design, naming the unrecognized key', async () => {
-    const res = await request(app).post('/api/orders').send({
-      ...validOrder(),
-      items: [{ design: validOrder().design, size: 'M', quantity: 5 }],
-    });
-
-    expect(res.status).toBe(422);
-    // This is the assertion that traps a future swap to z.union, which would report the useless
-    // "Invalid input" here while still returning 422.
-    expect(res.body.message).not.toMatch(/Invalid input/);
-    expect(res.body.message).toMatch(/design/);
+/**
+ * THE USER-VISIBLE PROOF OF PHASE 5.
+ *
+ * An old client — a stale tab, a cached bundle — still sends `{ design, totalKits, primarySize }`.
+ * That body is now simply wrong, and what matters is that it fails as something a developer can
+ * read: the unrecognized keys named, and `items` reported missing. A generic "Invalid input" here
+ * (which is what a z.union would have produced, and why the removed router was hand-written) would
+ * send whoever hits this hunting through the wrong layer.
+ */
+describe('POST /api/orders — the legacy single-design body is rejected', () => {
+  const legacyBody = () => ({
+    design: baseDesign(),
+    contact: {
+      firstName: 'Jane', lastName: 'Doe', email: 'jane@example.com',
+      phone: '+92 300 1234567', clubName: '',
+    },
+    address: {
+      street: '12 Mall Road', city: 'Lahore', province: '', postalCode: '', country: 'Pakistan',
+    },
+    deliveryId: 'express', paymentId: 'cod', totalKits: 11, primarySize: 'M', instructions: '',
   });
 
-  it.each([
-    ['legacy', () => ({ ...validOrder(), legacyShape: true })],
-    ['cart', () => ({ ...cartOrder(), legacyShape: true })],
-    ['legacy, false', () => ({ ...validOrder(), legacyShape: false })],
-  ])('rejects a client-supplied legacyShape on the %s branch', async (_label, build) => {
-    const res = await request(app).post('/api/orders').send(build());
+  it('names the unrecognized keys and the missing items array, and creates nothing', async () => {
+    const [[before]] = await pool.execute('SELECT COUNT(*) AS n FROM orders');
+
+    const res = await request(app).post('/api/orders').send(legacyBody());
+
     expect(res.status).toBe(422);
-    expect(res.body.message).toMatch(/legacyShape/);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+    expect(res.body.message).not.toMatch(/Invalid input/);
+
+    // Both halves of what is wrong with the body, in the machine-readable form the frontend reads.
+    const reported = JSON.stringify(res.body.details);
+    expect(reported).toMatch(/design/);
+    expect(reported).toMatch(/totalKits/);
+    expect(reported).toMatch(/primarySize/);
+    expect(res.body.details.items).toBeTruthy();
+
+    const [[after]] = await pool.execute('SELECT COUNT(*) AS n FROM orders');
+    expect(after.n).toBe(before.n);
   });
 });
 
@@ -312,7 +332,7 @@ describe('POST /api/orders/quote', () => {
     .send(body);
 
   const quoteBody = (items, deliveryId = 'standard') => ({ items, deliveryId });
-  const line = (over = {}) => ({ design: validOrder().design, size: 'M', quantity: 6, ...over });
+  const line = (over = {}) => ({ design: baseDesign(), size: 'M', quantity: 6, ...over });
 
   it('requires authentication', async () => {
     const res = await request(app).post('/api/orders/quote').send(quoteBody([line()]));
@@ -324,7 +344,7 @@ describe('POST /api/orders/quote', () => {
 
     const res = await quote(quoteBody([
       line({ quantity: 6 }),
-      line({ design: { ...validOrder().design, kitType: 'shorts' }, size: 'L', quantity: 5 }),
+      line({ design: { ...baseDesign(), kitType: 'shorts' }, size: 'L', quantity: 5 }),
     ]));
 
     expect(res.status).toBe(200);
@@ -388,7 +408,7 @@ describe('POST /api/orders/quote', () => {
   });
 
   it('still refuses a cart over the ceiling, with a message about the ceiling', async () => {
-    const res = await quote(quoteBody([line({ quantity: 500 }), line({ design: { ...validOrder().design, kitType: 'cap' }, quantity: 1 })]));
+    const res = await quote(quoteBody([line({ quantity: 500 }), line({ design: { ...baseDesign(), kitType: 'cap' }, quantity: 1 })]));
 
     expect(res.status).toBe(422);
     expect(res.body.code).toBe('PRICING_INVALID_QUANTITY');
@@ -425,9 +445,9 @@ describe('POST /api/orders/quote', () => {
     await pool.execute("UPDATE kit_prices SET is_active = 0 WHERE kit_type IN ('socks', 'cap')");
     try {
       const res = await quote(quoteBody([
-        line({ design: { ...validOrder().design, kitType: 'socks' } }),
+        line({ design: { ...baseDesign(), kitType: 'socks' } }),
         line(),
-        line({ design: { ...validOrder().design, kitType: 'cap' } }),
+        line({ design: { ...baseDesign(), kitType: 'cap' } }),
       ]));
 
       expect(res.status).toBe(422);
@@ -441,7 +461,7 @@ describe('POST /api/orders/quote', () => {
   it('names a line whose uploaded logo has been swept away', async () => {
     const res = await quote(quoteBody([
       line(),
-      line({ design: { ...validOrder().design, logoDataUrl: '/static/logos/ffffffff-ffff-4fff-8fff-ffffffffffff.webp' } }),
+      line({ design: { ...baseDesign(), logoDataUrl: '/static/logos/ffffffff-ffff-4fff-8fff-ffffffffffff.webp' } }),
     ]));
 
     expect(res.status).toBe(422);
@@ -453,8 +473,8 @@ describe('POST /api/orders/quote', () => {
     await pool.execute("UPDATE kit_prices SET is_active = 0 WHERE kit_type = 'socks'");
     try {
       const res = await quote(quoteBody([
-        line({ design: { ...validOrder().design, kitType: 'socks' } }),
-        line({ design: { ...validOrder().design, logoDataUrl: '/static/logos/ffffffff-ffff-4fff-8fff-ffffffffffff.webp' } }),
+        line({ design: { ...baseDesign(), kitType: 'socks' } }),
+        line({ design: { ...baseDesign(), logoDataUrl: '/static/logos/ffffffff-ffff-4fff-8fff-ffffffffffff.webp' } }),
       ]));
 
       // The point of checking logos before pricing: one round trip reports both faults.
@@ -473,15 +493,20 @@ describe('POST /api/orders/quote', () => {
  */
 describe('the 5-kit floor is still mandatory for ordering', () => {
   it.each([
-    ['cart', () => cartOrder({ items: [{ design: validOrder().design, size: 'M', quantity: 3 }] })],
-    ['legacy', () => validOrder({ root: { totalKits: 3 } })],
-  ])('%s shape: a 3-kit order is rejected', async (_label, build) => {
+    ['one-line', () => validOrder({ quantity: 3 })],
+    ['two-line', () => cartOrder({
+      items: [
+        { design: baseDesign(), size: 'M', quantity: 2 },
+        { design: baseDesign({ kitType: 'cap' }), size: 'M', quantity: 2 },
+      ],
+    })],
+  ])('%s cart: a sub-5-kit order is rejected', async (_label, build) => {
     const res = await request(app).post('/api/orders').send(build());
     expect(res.status).toBe(422);
   });
 
   it('a 3-kit cart QUOTES fine but does not ORDER — the two must disagree', async () => {
-    const items = [{ design: validOrder().design, size: 'M', quantity: 3 }];
+    const items = [{ design: baseDesign(), size: 'M', quantity: 3 }];
 
     const email = `floor-${Date.now()}@example.com`;
     await request(app).post('/api/auth/register').send({ name: 'Floor', email, password: 'Str0ng-Passw0rd!' });
@@ -503,18 +528,21 @@ describe('the 5-kit floor is still mandatory for ordering', () => {
 });
 
 /**
- * THE INVARIANT THAT LICENSES PHASE 5.
+ * THE INVARIANT PHASE 5 SPENT.
  *
- * If no order can exist without lines, the "order_items absent -> render the legacy singular
- * design" branch would exist for zero rows, and Phase 5 can delete it rather than carry it
- * forever. Self-contained: it places through BOTH shapes first, then asserts across every order in
- * the database — including the backfilled ones from migration 007 and everything this suite made.
+ * Because no order can exist without lines, order history and every future read can go to
+ * order_items alone — no "if the order has no lines, fall back to the singular columns" branch,
+ * which is what let migration 008 drop those columns outright. The invariant now has to HOLD
+ * rather than merely be true: nothing remains to fall back to.
+ *
+ * Self-contained: it places orders first, then asserts across every row in the database —
+ * including the ones migration 007 backfilled and everything this suite made.
  */
 describe('every order has at least one line', () => {
-  it('LEFT JOIN order_items finds no orphan header, after both payload shapes', async () => {
-    const legacy = await request(app).post('/api/orders').send(validOrder());
+  it('LEFT JOIN order_items finds no orphan header', async () => {
+    const single = await request(app).post('/api/orders').send(validOrder());
     const cart = await request(app).post('/api/orders').send(cartOrder());
-    expect(legacy.status).toBe(201);
+    expect(single.status).toBe(201);
     expect(cart.status).toBe(201);
 
     const [[row]] = await pool.execute(
@@ -538,7 +566,7 @@ describe('POST /api/orders — the client never sets the price', () => {
 
     expect(res.status).toBe(201);
     expect(res.body.pricing.total).toBe(31300);   // 2800 x 11 + 500
-    expect(res.body.pricing.unitPrice).toBe(2800);
+    expect(res.body.pricing.items[0].unitPrice).toBe(2800);
     expect(res.body.pricing.kitPrice).toBe(30800);
     expect(res.body.pricing.deliveryPrice).toBe(500);
     expect(res.body.pricing.discount).toBe(0);
@@ -549,10 +577,16 @@ describe('POST /api/orders — the client never sets the price', () => {
       root: { pricing: { total: 1 } },
     }));
     const [[row]] = await pool.execute(
-      'SELECT total_price, unit_price FROM orders WHERE reference = ?', [res.body.reference],
+      'SELECT total_price FROM orders WHERE reference = ?', [res.body.reference],
     );
     expect(row.total_price).toBe(31300);
-    expect(row.unit_price).toBe(2800);
+
+    // The per-line money is server-computed too — tampering reaches order_items no more than it
+    // reaches the header.
+    const [[line]] = await pool.execute(
+      'SELECT unit_price, line_total FROM order_items WHERE order_id = ?', [res.body.id],
+    );
+    expect(line).toMatchObject({ unit_price: 2800, line_total: 30800 });
   });
 
   it('accepts an order with no pricing object at all', async () => {
@@ -756,7 +790,7 @@ describe('POST /api/orders — logo handling', () => {
 
     expect(res.status).toBe(201);
     const [[row]] = await pool.execute(
-      'SELECT design_json FROM orders WHERE reference = ?', [res.body.reference],
+      'SELECT design_json FROM order_items WHERE order_id = ?', [res.body.id],
     );
     // mysql2 parses JSON columns already — never JSON.parse them.
     const stored = row.design_json.logoDataUrl;
@@ -791,7 +825,7 @@ describe('POST /api/orders — logo handling', () => {
 
     expect(res.status).toBe(201);
     const [[row]] = await pool.execute(
-      'SELECT design_json FROM orders WHERE reference = ?', [res.body.reference],
+      'SELECT design_json FROM order_items WHERE order_id = ?', [res.body.id],
     );
     expect(row.design_json.logoDataUrl).toBe(url);        // byte-identical, not re-minted
     expect(readdirSync(env.LOGO_DIR).length).toBe(before); // no second copy
@@ -841,8 +875,8 @@ describe('POST /api/orders — validation', () => {
     expect(res.body.code).toBe('VALIDATION_ERROR');
   });
 
-  it('rejects totalKits below the 5-kit minimum', async () => {
-    const res = await request(app).post('/api/orders').send(validOrder({ root: { totalKits: 4 } }));
+  it('rejects a cart below the 5-kit minimum', async () => {
+    const res = await request(app).post('/api/orders').send(validOrder({ quantity: 4 }));
     expect(res.status).toBe(422);
   });
 

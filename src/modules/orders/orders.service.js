@@ -15,23 +15,14 @@ import { AppError } from '../../utils/AppError.js';
  * docs/backend-plan.md §1.1).
  */
 export async function placeOrder({ body, userId = null, idempotencyKey = null, ip = null }) {
-  // `body` is always the CART shape by the time it gets here: orders.schema normalises a legacy
-  // single-design payload into a one-item cart and marks it `legacyShape`. That flag is derived by
-  // the parser and is not accepted from the request; all it decides is whether the nullable
-  // singular columns are written. There is one code path below, not two.
-  const isLegacy = body.legacyShape === true;
-
   // A repeat of a request we already completed. Return the original rather than making a second
   // order — checked before any work so a double-click costs nothing.
   if (idempotencyKey) {
     const existing = await ordersRepository.findByIdempotencyKey(idempotencyKey);
-    if (existing) return { order: await toOrderResponse(existing, isLegacy), replayed: true };
+    if (existing) return { order: await toOrderResponse(existing), replayed: true };
   }
 
   // ── Pricing: server-computed, client-ignored ────────────────────────────────
-  // computeCartPricing for BOTH shapes. Two pricing routes over one normalised shape would drift;
-  // the 72-case characterization matrix in pricing.test.js proves a one-item cart agrees with the
-  // old computePricing on every figure, which is what makes this safe.
   const pricing = await computeCartPricing({
     items: body.items.map((item) => ({
       kitType: item.design.kitType,
@@ -88,11 +79,6 @@ export async function placeOrder({ body, userId = null, idempotencyKey = null, i
     const order = await withTransaction(async (db) => {
       const id = await ordersRepository.insertOrder({
         userId,
-        // The singular columns, nullable since 007, are written ONLY for a legacy body. A
-        // multi-line cart has no single design, size or unit price, and inventing one would be
-        // worse than a NULL. Phase 5 drops these columns and this branch together.
-        design: isLegacy ? designs[0] : null,
-        primarySize: isLegacy ? body.items[0].size : null,
         contact: body.contact,
         address: body.address,
         deliveryId: body.deliveryId,
@@ -100,7 +86,6 @@ export async function placeOrder({ body, userId = null, idempotencyKey = null, i
         totalKits: pricing.totalKits,
         instructions: body.instructions,
         pricing: {
-          unitPrice: isLegacy ? pricing.items[0].unitPrice : null,
           kitPrice: pricing.kitPrice,
           deliveryPrice: pricing.deliveryPrice,
           discount: pricing.discount,
@@ -120,7 +105,7 @@ export async function placeOrder({ body, userId = null, idempotencyKey = null, i
       order: {
         id: order.id,
         reference: order.reference,
-        pricing: isLegacy ? toLegacyPricing(pricing) : pricing,
+        pricing,
         status: 'placed',
       },
       replayed: false,
@@ -135,7 +120,7 @@ export async function placeOrder({ body, userId = null, idempotencyKey = null, i
     // consequence (COUNT(*) unchanged) rather than either mechanism.
     if (err.errno === 1062 && idempotencyKey) {
       const existing = await ordersRepository.findByIdempotencyKey(idempotencyKey);
-      if (existing) return { order: await toOrderResponse(existing, isLegacy), replayed: true };
+      if (existing) return { order: await toOrderResponse(existing), replayed: true };
     }
     throw err;
   }
@@ -255,52 +240,13 @@ async function resolveLogo(design, userId) {
 }
 
 /**
- * Projects cart pricing back into the flat single-design shape the legacy contract returns.
- *
- * Field-for-field identical to what computePricing used to return — that equivalence is asserted
- * by the characterization matrix, not assumed here.
- */
-function toLegacyPricing(pricing) {
-  const [line] = pricing.items;
-  return {
-    unitPrice: line.unitPrice,
-    kitLabel: line.kitLabel,
-    templateName: line.templateName,
-    sportLabel: line.sportLabel,
-    kitPrice: pricing.kitPrice,
-    deliveryName: pricing.deliveryName,
-    deliveryPrice: pricing.deliveryPrice,
-    discount: pricing.discount,
-    total: pricing.total,
-  };
-}
-
-/**
  * Rebuilds the contract response from stored rows, for the idempotent-replay path.
- *
- * The shape mirrors the REQUEST, which is sound because a replay is by definition the same request
- * retried: a legacy retry wants the flat shape, a cart retry wants lines.
  *
  * Every figure comes from the persisted columns, never from a recompute. A price could have
  * changed between the original order and the retry, and the reply must state what was actually
  * charged.
  */
-async function toOrderResponse(row, isLegacy) {
-  if (isLegacy) {
-    return {
-      id: row.id,
-      reference: row.reference,
-      status: row.status,
-      pricing: {
-        unitPrice: row.unit_price,
-        kitPrice: row.kit_price,
-        deliveryPrice: row.delivery_price,
-        discount: row.discount,
-        total: row.total_price,
-      },
-    };
-  }
-
+async function toOrderResponse(row) {
   const items = await ordersRepository.findItemsByOrderId(row.id);
 
   return {
