@@ -294,6 +294,10 @@ one consistent unit" — not the specific unit. Don't retrofit ×100 for its own
 > below as the dated record of the original single-design design — the reasoning under it still
 > holds, and `src/db/migrations/` is what the table actually looks like.
 
+> **`payment_id`'s `ENUM` narrowed from `('card','bank','cod')` to `('bank','cod')` on 2026-08-14**
+> (migration 009) — 'Card' was removed as a payment option; nothing behind it ever charged
+> anything (see the note near the `paymentId` zod schema below).
+
 ```sql
 -- 004_orders.sql  (as originally specified — see the note above)
 CREATE TABLE orders (
@@ -460,6 +464,11 @@ Why the specific bounds:
 **Card details:** the contract confirms they never reach `/orders`, only `paymentId`. Keep it
 that way. If a card number ever appears in a request body, you're in PCI-DSS scope, and that's
 a compliance project rather than a feature.
+
+> **'Card' was removed as a `paymentId` value on 2026-08-14.** The checkout form validated card
+> number/expiry/CVV format client-side but never charged anything — no gateway integration exists
+> — so offering it implied a payment collection that never happened. `paymentId` is now
+> `z.enum(['bank', 'cod'])`; live shape: `src/modules/orders/orders.schema.js`.
 
 ---
 

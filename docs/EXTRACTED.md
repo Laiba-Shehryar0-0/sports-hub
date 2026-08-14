@@ -74,8 +74,8 @@ Note the literal is `striped`, not `stripes`.
   font: 'Bebas Neue',
   nameSize: 14,
   numberSize: 46,
-  textPosition: { x: 0.50, y: 0.38 },
-  numberPosition: { x: 0.50, y: 0.58 },
+  textPosition: { front: { x: 0.50, y: 0.38 }, back: { x: 0.50, y: 0.38 } },
+  numberPosition: { front: { x: 0.50, y: 0.58 }, back: { x: 0.50, y: 0.58 } },
   logoDataUrl: null,
   logoPreset: null,
   logoScale: 80,
@@ -89,6 +89,12 @@ Note the literal is `striped`, not `stripes`.
 25 top-level keys (5 are nested objects/arrays: `opacity`, `playerName`, `playerNumber`,
 `textPosition`, `numberPosition`, `logoPosition`, `layers`, `layerOrder` — 8 actually, several
 nest further).
+
+**`textPosition`/`numberPosition` widened to `{front, back}` on 2026-08-14** — previously a single
+shared `{x,y}`, so moving the name while viewing the back also moved it on the front (they're the
+same two fields the name/number text itself already split by side). `logoPosition` was NOT
+widened: the logo only ever renders on the front (`KitPreview` hardcodes `side === 'front'` for
+it), so there is no back position for it to diverge from.
 
 ---
 
@@ -161,8 +167,8 @@ The plan's schema (`backend-plan.md` line 365-386) validates only: `kitType`, `s
 - `opacity` (`{ body, sleeves, number, collar }`)
 - `nameSize`
 - `numberSize`
-- `textPosition` (`{ x, y }`)
-- `numberPosition` (`{ x, y }`)
+- `textPosition` (`{ front: { x, y }, back: { x, y } }`)
+- `numberPosition` (`{ front: { x, y }, back: { x, y } }`)
 - `logoScale`
 - `logoOpacity`
 - `logoPosition` (`{ x, y }`)
@@ -271,8 +277,7 @@ await placeOrder({
 | `address.province/postalCode` | `TextField`, state init `''`, **not required** — can reach the request as `''`. |
 | `address.country` | `TextField`, state init `'Pakistan'`, **not required and has no validation entry at all** — the user can clear this input and submit `''`. See discrepancy below. |
 | `deliveryId` | Button group, state init `'express'`, always one of the 4 `DELIVERY_METHODS` ids — never free text. |
-| `paymentId` | Button group, state init `'card'`, always one of the 3 `PAYMENT_METHODS` ids. |
-| `card.number/expiry/cvv/name` | Collected and **required when `paymentId === 'card'`**, but **never included in the request body** — confirms `API_CONTRACT.md`'s "card details never reach `/orders`" claim. |
+| `paymentId` | Button group, state init `'bank'`, always one of the 2 `PAYMENT_METHODS` ids. **'card' was removed 2026-08-14** — no gateway ever existed behind it, so the option never actually charged anything; the card number/expiry/CVV/name fields and their client-side validation were deleted along with it. |
 | `totalKits` | `useState(11)`, changed via +/- buttons (floor 5) or `QUANTITY_PRESETS` (5/11/15/20) — always a JS number, never a string, no client-side upper bound. |
 | `primarySize` | `useState(design.size \|\| 'M')`, changed via `<select>` over `SIZES` — always one of `S/M/L/XL/Custom`, never `''`. |
 | `instructions` | `<textarea>`, state init `''`, optional — can reach the request as `''`. |
@@ -337,8 +342,8 @@ placeholder guesses in `schemas-draft.md`.
 | `opacity.{body,sleeves,number,collar}` | slider `min="0" max="100"` (one shared slider, reused per `applyTarget`) | `Customize.jsx:706` |
 | `nameSize` | slider `min={8} max={30}` | `Customize.jsx:783` |
 | `numberSize` | slider `min={20} max={80}` | `Customize.jsx:784` |
-| `textPosition.{x,y}` | nudge-button grid, clamped to `xMin:0.15, xMax:0.85, yMin:0.12, yMax:0.88` (step `0.035`); center button sets exactly `{x:0.5,y:0.5}` | `Customize.jsx:792` (usage), `814-815` (`POSITION_STEP`/`POSITION_BOUNDS`), `817-819` (`clamp`), `833-836` (clamp applied) |
-| `numberPosition.{x,y}` | same `PositionGrid` component, same clamp: `xMin:0.15, xMax:0.85, yMin:0.12, yMax:0.88` | `Customize.jsx:796` |
+| `textPosition[side].{x,y}` | nudge-button grid, clamped to `xMin:0.15, xMax:0.85, yMin:0.12, yMax:0.88` (step `0.035`); center button sets exactly `{x:0.5,y:0.5}`; reads/writes `design.textPosition[side]` only, so nudging one side leaves the other's `{x,y}` untouched | `Customize.jsx` `TextPanel`/`PositionGrid` |
+| `numberPosition[side].{x,y}` | same `PositionGrid` component, same clamp and same per-side isolation as `textPosition` | `Customize.jsx` `TextPanel`/`PositionGrid` |
 | `logoScale` | slider `min={30} max={150}` | `Customize.jsx:915` |
 | `logoOpacity` | slider `min={0} max={100}` | `Customize.jsx:916` |
 | `logoPosition.{x,y}` | same `PositionGrid` component as text/number position, same clamp: `xMin:0.15, xMax:0.85, yMin:0.12, yMax:0.88` | `Customize.jsx:921` |

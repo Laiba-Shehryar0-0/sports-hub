@@ -130,8 +130,9 @@ export const createOrderSchema = z.object({
 
   // Matches DELIVERY_METHODS ids verbatim (kitShapes.js:113-118).
   deliveryId: z.enum(['standard', 'express', 'rush', 'international']),
-  // Matches PAYMENT_METHODS ids verbatim (kitShapes.js:127-131).
-  paymentId:  z.enum(['card', 'bank', 'cod']),
+  // Matches PAYMENT_METHODS ids verbatim (kitShapes.js). 'card' removed 2026-08-14 — no gateway
+  // ever existed behind it, so it never actually charged anything.
+  paymentId:  z.enum(['bank', 'cod']),
 
   // Product decision: floor raised from 1 to 5, matching the Checkout UI's stated minimum order
   // (Checkout.jsx:187, the quantity stepper's Math.max(5, q - 1) floor) instead of only the

@@ -1,10 +1,10 @@
-// Snapshot of ../kit-frontend as of 2026-08-13 — reference only, do not edit here.
+// Snapshot of ../kit-frontend as of 2026-08-14 — reference only, do not edit here.
 // Source: src/customize/KitCanvasEditor.jsx
 
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { Canvas, PencilBrush, Textbox, FabricImage, Ellipse, Polygon, Path } from 'fabric';
+import { Canvas, PencilBrush, Textbox, Ellipse, Polygon, Path } from 'fabric';
 import KitPreview from './KitPreview';
 import { COLOR_PALETTE, FONTS, loadStoredDesign, DRAWN_LOGO_KEY, saveEditedKitImage, KIT_CANVAS_STATE_KEY, resolveShapeKey } from './kitShapes';
 import {
@@ -150,25 +150,41 @@ function inlineSvgImages(svgEl) {
   }));
 }
 
-/** Reads back the saved Fabric canvas state (strokes, shapes, text) for one side of the Kit
- *  Editor, if any was saved on a previous visit. */
-function loadKitCanvasState(side) {
+/**
+ * Reads back the saved Fabric canvas state (strokes, shapes, text) for one side of the Kit
+ * Editor, if any was saved on a previous visit — but only if it was saved on this exact SHAPE.
+ *
+ * This used to key purely by `side`, so a Training Bib and a Basketball Jersey — both kitType
+ * 'jersey', different silhouettes since product shapes landed — shared the same saved state.
+ * Draw on the bib, switch the live design to the jersey, reopen the editor: the bib's strokes
+ * loaded straight onto the jersey's background. That's the exact class of bug the shape-key tag
+ * on loadEditedKitImage/saveEditedKitImage already exists to prevent, just reintroduced here
+ * because the full canvas state was never given the same treatment.
+ *
+ * Callers pass resolveShapeKey(design.kitType, design.kitProduct). Entries saved before this
+ * change are bare Fabric JSON with no `shape` field — treated as stale, the same conservative
+ * handling loadEditedKitImage already applies to its own untagged entries.
+ */
+export function loadKitCanvasState(side, shapeKey) {
   try {
     const raw = localStorage.getItem(KIT_CANVAS_STATE_KEY);
     if (!raw) return null;
-    return JSON.parse(raw)?.[side] || null;
+    const entry = JSON.parse(raw)?.[side];
+    if (!entry || typeof entry !== 'object' || !('shape' in entry)) return null;
+    return entry.shape === shapeKey ? entry.json : null;
   } catch {
     return null;
   }
 }
 
-/** Persists the Fabric canvas state (via canvas.toJSON()) for one side of the Kit Editor, so
- *  reopening it later continues the same in-progress edit instead of starting over. */
-function saveKitCanvasState(side, json) {
+/** Persists the Fabric canvas state (via canvas.toJSON()) for one side of the Kit Editor, tagged
+ *  with the SHAPE it was drawn on so it can never be loaded onto a different silhouette later —
+ *  see loadKitCanvasState. */
+export function saveKitCanvasState(side, json, shapeKey) {
   try {
     const raw = localStorage.getItem(KIT_CANVAS_STATE_KEY);
     const parsed = raw ? JSON.parse(raw) : {};
-    parsed[side] = json;
+    parsed[side] = { shape: shapeKey, json };
     localStorage.setItem(KIT_CANVAS_STATE_KEY, JSON.stringify(parsed));
   } catch {
     /* storage unavailable */
@@ -221,6 +237,39 @@ function floodFill(imageData, startX, startY, fillRgba, tolerance = 32) {
 }
 
 /**
+ * Every export path (Export PNG, Use as Logo, save-and-go-back) needs the FULL picture — garment
+ * plus strokes — as one flattened PNG. That used to be free: canvas.toDataURL() captured
+ * everything because the garment was part of Fabric's own canvas. Now that it's a separate
+ * element (the whole point — see the mount effect), exporting means compositing the two layers
+ * back together by hand: draw the background canvas first, then Fabric's own (transparent
+ * elsewhere) render on top, onto one offscreen canvas at the export resolution.
+ *
+ * Fabric's own multiplier-based supersampling is used for its half (`fabricCanvas.toDataURL`) so
+ * strokes/text stay crisp at the higher export resolution; the background half is already a fixed
+ * CANVAS_W x CANVAS_H raster (rasterized from an SVG once, not re-vectorized here), so it scales
+ * the same way it always effectively did when it went through this exact multiplier as a Fabric
+ * backgroundImage before.
+ */
+function compositeExportDataUrl(fabricCanvas, bgCanvasEl, multiplier) {
+  const w = CANVAS_W * multiplier;
+  const h = CANVAS_H * multiplier;
+  const objectsUrl = fabricCanvas.toDataURL({ format: 'png', multiplier });
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      const out = document.createElement('canvas');
+      out.width = w;
+      out.height = h;
+      const ctx = out.getContext('2d');
+      ctx.drawImage(bgCanvasEl, 0, 0, w, h);
+      ctx.drawImage(img, 0, 0, w, h);
+      resolve(out.toDataURL('image/png'));
+    };
+    img.src = objectsUrl;
+  });
+}
+
+/**
  * Shared canvas-editing engine behind both Draw Studio (mode="logo" — draws on the kit,
  * exports the result as a logo image) and Kit Editor (mode="kit" — draws on the kit,
  * exports it as the finished kit artwork). Same tools, different purpose/output.
@@ -233,8 +282,12 @@ export default function KitCanvasEditor({ mode, initialSide = 'front' }) {
   const loadingRef = useRef(false);
   const hiddenPreviewRef = useRef(null);
   const canvasCardRef = useRef(null);
+  // A REAL, DOM-mounted canvas now (used to be an offscreen document.createElement('canvas'),
+  // re-uploaded into Fabric as canvas.backgroundImage on every change) — see the mount effect
+  // below for why that had to change: Fabric's own destination-out erase strokes cannot reach
+  // outside Fabric's own canvas context, so keeping the garment on a genuinely separate <canvas>
+  // element is what stops the eraser from erasing it.
   const bgCanvasElRef = useRef(null);
-  if (!bgCanvasElRef.current) bgCanvasElRef.current = document.createElement('canvas');
 
   const [design] = useState(() => loadStoredDesign());
   const [activeTab, setActiveTab] = useState('colors');
@@ -253,74 +306,108 @@ export default function KitCanvasEditor({ mode, initialSide = 'front' }) {
   const historyRef = useRef({ past: [], future: [] });
   const [historyTick, setHistoryTick] = useState(0);
 
-  const restoreFromJSON = useCallback((json) => {
+  /**
+   * A snapshot is now { objects, bg } — Fabric's own JSON plus the background canvas's current
+   * bitmap — not just the former. Fill paints directly onto the background canvas (see the fill
+   * click handler below) and never touches a Fabric object, so a snapshot that only captured
+   * `canvas.toJSON()` would silently stop covering Fill actions once the background moved off
+   * the Fabric canvas: Undo would restore the strokes but leave a fill in place. Erase doesn't
+   * need this — it only ever erases other Fabric objects now, which toJSON() already captures.
+   */
+  const snapshotNow = useCallback(() => ({
+    objects: JSON.stringify(fabricRef.current.toJSON()),
+    bg: bgCanvasElRef.current.toDataURL('image/png'),
+  }), []);
+
+  const restoreSnapshot = useCallback(({ objects, bg }) => {
     const canvas = fabricRef.current;
     loadingRef.current = true;
-    canvas.loadFromJSON(json).then(() => {
+
+    const img = new Image();
+    img.onload = () => {
+      const bctx = bgCanvasElRef.current.getContext('2d');
+      bctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
+      bctx.drawImage(img, 0, 0, CANVAS_W, CANVAS_H);
+    };
+    img.src = bg;
+
+    canvas.loadFromJSON(JSON.parse(objects)).then(() => {
       canvas.requestRenderAll();
       loadingRef.current = false;
       setObjectsTick(t => t + 1);
-      const bg = canvas.backgroundImage;
-      if (bg && bg._element) {
-        const bctx = bgCanvasElRef.current.getContext('2d');
-        bctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
-        bctx.drawImage(bg._element, 0, 0, CANVAS_W, CANVAS_H);
-      }
     });
   }, []);
 
   const pushHistorySnapshot = useCallback(() => {
-    const canvas = fabricRef.current;
-    if (!canvas || loadingRef.current) return;
+    if (!fabricRef.current || loadingRef.current) return;
     const h = historyRef.current;
-    h.past.push(JSON.stringify(canvas.toJSON()));
+    h.past.push(snapshotNow());
     h.future = [];
     setHistoryTick(t => t + 1);
-  }, []);
+  }, [snapshotNow]);
 
   const handleUndo = useCallback(() => {
     const h = historyRef.current;
-    const canvas = fabricRef.current;
-    if (!canvas || h.past.length === 0) return;
-    const current = JSON.stringify(canvas.toJSON());
+    if (!fabricRef.current || h.past.length === 0) return;
+    const current = snapshotNow();
     const previous = h.past.pop();
     h.future.push(current);
-    restoreFromJSON(JSON.parse(previous));
+    restoreSnapshot(previous);
     setHistoryTick(t => t + 1);
-  }, [restoreFromJSON]);
+  }, [snapshotNow, restoreSnapshot]);
 
   const handleRedo = useCallback(() => {
     const h = historyRef.current;
-    const canvas = fabricRef.current;
-    if (!canvas || h.future.length === 0) return;
-    const current = JSON.stringify(canvas.toJSON());
+    if (!fabricRef.current || h.future.length === 0) return;
+    const current = snapshotNow();
     const next = h.future.pop();
     h.past.push(current);
-    restoreFromJSON(JSON.parse(next));
+    restoreSnapshot(next);
     setHistoryTick(t => t + 1);
-  }, [restoreFromJSON]);
+  }, [snapshotNow, restoreSnapshot]);
 
   /* ── Create the fabric canvas once ─────────────────────────── */
   useEffect(() => {
-    // React 18 StrictMode double-invokes this effect on mount (setup → cleanup → setup),
-    // and the SVG-rasterize chain below is async (Image.onload → toDataURL → FabricImage
-    // .fromURL().then). Without this guard, the first (soon-to-be-disposed) invocation's
-    // callbacks can still fire after the second invocation is live, both writing into the
-    // same shared bgCanvasElRef and racing to set backgroundImage on whichever canvas
-    // instance ends up wrapping the physical <canvas> node — producing a corrupted,
-    // undersized, top-left-anchored composite instead of the real kit artwork.
+    // React 18 StrictMode double-invokes this effect on mount (setup → cleanup → setup), and the
+    // SVG-rasterize chain below is async (Image.onload, further down another Image.onload for a
+    // saved state's bg). Without this guard, the first (soon-to-be-disposed) invocation's
+    // callbacks can still fire after the second invocation is live, both writing into the same
+    // shared bgCanvasElRef and racing to draw onto whichever canvas instance's context ends up
+    // being the live one — producing a corrupted, undersized, top-left-anchored composite instead
+    // of the real kit artwork.
     let cancelled = false;
 
     const canvas = new Canvas(canvasElRef.current, {
       width: CANVAS_W,
       height: CANVAS_H,
-      backgroundColor: themeColor('canvas-light', '#f7f7f5'),
+      // TRANSPARENT, not the neutral canvas colour — that colour now lives on bgCanvasElRef,
+      // the real DOM canvas stacked underneath (see JSX). Fabric's canvas holds ONLY the user's
+      // drawn objects, which is exactly what makes destination-out erasing below safe: it can
+      // only ever erase pixels that exist within Fabric's own canvas, and the garment simply
+      // isn't one of them anymore.
+      backgroundColor: 'transparent',
       preserveObjectStacking: true,
       enableRetinaScaling: false,
     });
     fabricRef.current = canvas;
+    // Fabric wraps the target <canvas> in its own container element; stack that wrapper exactly
+    // over the background canvas (both sized CANVAS_W x CANVAS_H inside the same relatively
+    // positioned parent — see JSX) rather than trusting inline styles on the original element,
+    // which Fabric relocates into that wrapper and may not preserve.
+    if (canvas.wrapperEl) {
+      canvas.wrapperEl.style.position = 'absolute';
+      canvas.wrapperEl.style.inset = '0';
+    }
     bgCanvasElRef.current.width = CANVAS_W;
     bgCanvasElRef.current.height = CANVAS_H;
+    // Seed the neutral backdrop immediately — otherwise there's a flash of a blank canvas before
+    // the kit SVG below finishes rasterizing (or, on the saved-state path, before that snapshot's
+    // image decodes). This is what canvas.backgroundColor used to do for free.
+    {
+      const bctx0 = bgCanvasElRef.current.getContext('2d');
+      bctx0.fillStyle = themeColor('canvas-light', '#f7f7f5');
+      bctx0.fillRect(0, 0, CANVAS_W, CANVAS_H);
+    }
 
     const pushHistory = () => {
       pushHistorySnapshot();
@@ -343,18 +430,26 @@ export default function KitCanvasEditor({ mode, initialSide = 'front' }) {
 
     // If this side was already edited on a previous visit, pick up exactly where that edit left
     // off (strokes, shapes, text and all) instead of re-rendering a fresh canvas from the live
-    // design — "Back" then re-opening the editor should continue the same edited kit.
-    const savedState = mode === 'kit' ? loadKitCanvasState(initialSide) : null;
+    // design — "Back" then re-opening the editor should continue the same edited kit. Unchanged
+    // from before: a saved state's own `bg` snapshot is trusted as-is, not re-rasterized from the
+    // (possibly since-changed) live design — same tradeoff the old backgroundImage-in-JSON version
+    // already made, just relocated.
+    const savedState = mode === 'kit'
+      ? loadKitCanvasState(initialSide, resolveShapeKey(design.kitType, design.kitProduct))
+      : null;
     if (savedState) {
-      canvas.loadFromJSON(savedState).then(() => {
+      const bgImg = new Image();
+      bgImg.onload = () => {
+        if (cancelled) return;
+        const bctx = bgCanvasElRef.current.getContext('2d');
+        bctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
+        bctx.drawImage(bgImg, 0, 0, CANVAS_W, CANVAS_H);
+      };
+      bgImg.src = savedState.bg;
+
+      canvas.loadFromJSON(savedState.objects).then(() => {
         if (cancelled) return;
         canvas.requestRenderAll();
-        const bg = canvas.backgroundImage;
-        if (bg && bg._element) {
-          const bctx = bgCanvasElRef.current.getContext('2d');
-          bctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
-          bctx.drawImage(bg._element, 0, 0, CANVAS_W, CANVAS_H);
-        }
         pushHistorySnapshot();
         setReady(true);
       }).catch(() => {
@@ -412,35 +507,19 @@ export default function KitCanvasEditor({ mode, initialSide = 'front' }) {
           const left = (CANVAS_W - drawW) / 2;
           const top = (CANVAS_H - drawH) / 2;
 
+          // Drawn straight onto bgCanvasElRef, which is the real, visible, DOM-mounted canvas
+          // now — no more round-tripping through toDataURL() -> FabricImage.fromURL() -> Fabric's
+          // canvas.backgroundImage just to get pixels that are already sitting right here onto
+          // the screen. That round trip existed only because the garment used to have to live
+          // inside Fabric's own canvas; it doesn't anymore.
           const bctx = bgCanvasElRef.current.getContext('2d');
           bctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
           bctx.fillStyle = themeColor('canvas-light', '#f7f7f5');
           bctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
           bctx.drawImage(rawImg, left, top, drawW, drawH);
 
-          const flatUrl = bgCanvasElRef.current.toDataURL('image/png');
-          FabricImage.fromURL(flatUrl).then(img => {
-            if (cancelled) return;
-            // Force this to stretch to exactly the canvas size, no matter what img.width/height
-            // report — that reported size has been unreliable, so stop depending on it entirely.
-            // originX/originY must be pinned to 'left'/'top' explicitly: Fabric images default to
-            // center-origin, so left:0/top:0 would otherwise place the image's *center* — not its
-            // corner — at the canvas origin, leaving only its bottom-right quadrant visible.
-            img.set({
-              left: 0,
-              top: 0,
-              originX: 'left',
-              originY: 'top',
-              scaleX: CANVAS_W / img.width,
-              scaleY: CANVAS_H / img.height,
-              selectable: false,
-              evented: false,
-            });
-            canvas.backgroundImage = img;
-            canvas.requestRenderAll();
-            pushHistorySnapshot();
-            setReady(true);
-          });
+          pushHistorySnapshot();
+          setReady(true);
         };
         rawImg.src = url;
       });
@@ -473,23 +552,24 @@ export default function KitCanvasEditor({ mode, initialSide = 'front' }) {
 
     const handleClick = (opt) => {
       if (activeToolRef.current !== 'fill') return;
-      const pointer = canvas.getPointer(opt.e);
+      // getPointer was Fabric v5/v6's name for this; v7 (installed here) renamed it to
+      // getScenePoint. Pre-existing bug, unrelated to the eraser/background fix above — found
+      // because it was throwing on every Fill click, discovered while verifying that fix.
+      const pointer = canvas.getScenePoint(opt.e);
       const x = Math.round(pointer.x), y = Math.round(pointer.y);
       if (x < 0 || y < 0 || x >= CANVAS_W || y >= CANVAS_H) return;
 
+      // Fill has always painted the background canvas's own pixels directly — that never went
+      // through Fabric, so this isn't a behavior change. The Fabric-Image round trip that used to
+      // follow (encode to a data URL, decode it back into a Fabric Image, assign it as
+      // canvas.backgroundImage) only existed to get those pixels showing on Fabric's canvas; now
+      // that bgCanvasElRef is the real, visible canvas, putImageData already IS the screen update.
       const bctx = bgCanvasElRef.current.getContext('2d');
       const imageData = bctx.getImageData(0, 0, CANVAS_W, CANVAS_H);
       const changed = floodFill(imageData, x, y, hexToRgba(brushColor, 255), 40);
       if (!changed) return;
       bctx.putImageData(imageData, 0, 0);
-
-      const url = bgCanvasElRef.current.toDataURL('image/png');
-      FabricImage.fromURL(url).then(img => {
-        img.set({ left: 0, top: 0, originX: 'left', originY: 'top', selectable: false, evented: false });
-        canvas.backgroundImage = img;
-        canvas.requestRenderAll();
-        pushHistorySnapshot();
-      });
+      pushHistorySnapshot();
     };
 
     canvas.on('mouse:down', handleClick);
@@ -550,8 +630,6 @@ export default function KitCanvasEditor({ mode, initialSide = 'front' }) {
     if (!canvas) return;
     loadingRef.current = true;
     canvas.getObjects().slice().forEach(obj => canvas.remove(obj));
-    canvas.backgroundImage = null;
-    canvas.backgroundColor = themeColor('canvas-light', '#f7f7f5');
     canvas.requestRenderAll();
     loadingRef.current = false;
 
@@ -594,9 +672,8 @@ export default function KitCanvasEditor({ mode, initialSide = 'front' }) {
     openSignIn({ id: 'kit-editor:export', label: 'export your design', run: exportPNG });
   };
 
-  const exportPNG = () => {
-    const canvas = fabricRef.current;
-    const url = canvas.toDataURL({ format: 'png', multiplier: EXPORT_MULTIPLIER });
+  const exportPNG = async () => {
+    const url = await compositeExportDataUrl(fabricRef.current, bgCanvasElRef.current, EXPORT_MULTIPLIER);
     const a = document.createElement('a');
     a.href = url;
     a.download = `kit-${mode === 'logo' ? 'drawing' : 'design'}-${Date.now()}.png`;
@@ -604,21 +681,22 @@ export default function KitCanvasEditor({ mode, initialSide = 'front' }) {
     setToast('Exported PNG');
   };
 
-  const useAsLogo = () => {
-    const canvas = fabricRef.current;
-    const url = canvas.toDataURL({ format: 'png', multiplier: EXPORT_MULTIPLIER });
+  const useAsLogo = async () => {
+    const url = await compositeExportDataUrl(fabricRef.current, bgCanvasElRef.current, EXPORT_MULTIPLIER);
     try { localStorage.setItem(DRAWN_LOGO_KEY, url); } catch { /* storage unavailable */ }
     navigate('/customize');
   };
 
   /** In kit-editing mode, save the current canvas as the final edited kit before leaving —
-   *  a flattened PNG so it's what gets used at checkout/order, and the full Fabric canvas state
-   *  so reopening the editor for this side later continues the same edit instead of resetting. */
-  const goBackToStudio = () => {
+   *  a flattened PNG so it's what gets used at checkout/order, and the full canvas state (both
+   *  layers — see snapshotNow) so reopening the editor for this side later continues the same
+   *  edit instead of resetting. */
+  const goBackToStudio = async () => {
     if (mode === 'kit' && fabricRef.current) {
-      const url = fabricRef.current.toDataURL({ format: 'png', multiplier: EXPORT_MULTIPLIER });
-      saveEditedKitImage(initialSide, url, resolveShapeKey(design.kitType, design.kitProduct));
-      saveKitCanvasState(initialSide, fabricRef.current.toJSON());
+      const url = await compositeExportDataUrl(fabricRef.current, bgCanvasElRef.current, EXPORT_MULTIPLIER);
+      const shapeKey = resolveShapeKey(design.kitType, design.kitProduct);
+      saveEditedKitImage(initialSide, url, shapeKey);
+      saveKitCanvasState(initialSide, snapshotNow(), shapeKey);
       // Carry the side back so Customize reopens on the same side just edited — otherwise its
       // own side state always defaults to 'front' on remount, showing the wrong side's result.
       navigate(`/customize?side=${initialSide}`);
@@ -712,7 +790,15 @@ export default function KitCanvasEditor({ mode, initialSide = 'front' }) {
         <main className={canvasCls}>
           <div ref={canvasCardRef} className={canvasCardCls}>
             {!ready && <div className={drawLoadingCls}>Loading your kit…</div>}
-            <canvas ref={canvasElRef} />
+            {/* Two stacked canvases, not one: bgCanvasElRef holds the garment (painted directly,
+                never through Fabric), canvasElRef is Fabric's own — transparent — canvas holding
+                only the user's strokes/shapes/text on top. Keeping them genuinely separate DOM
+                elements is what stops an eraser stroke's destination-out from ever being able to
+                reach the garment underneath; see the mount effect for the rest of why. */}
+            <div style={{ position: 'relative', width: CANVAS_W, height: CANVAS_H }}>
+              <canvas ref={bgCanvasElRef} width={CANVAS_W} height={CANVAS_H} style={{ position: 'absolute', inset: 0 }} />
+              <canvas ref={canvasElRef} style={{ position: 'absolute', inset: 0 }} />
+            </div>
             {toast && <div className={drawToastCls}>{toast}</div>}
           </div>
         </main>

@@ -1,4 +1,4 @@
-// Snapshot of ../kit-frontend as of 2026-08-13 — reference only, do not edit here.
+// Snapshot of ../kit-frontend as of 2026-08-14 — reference only, do not edit here.
 // Source: src/pages/Customize.jsx
 
 import { useState, useRef, useCallback, useEffect } from 'react';
@@ -8,9 +8,9 @@ import KitPreview from '../customize/KitPreview';
 import useHistoryState from '../hooks/useHistoryState';
 import {
   KIT_TYPES, SPORTS, SIZES, SIZE_UNITS, COLOR_PALETTE, APPLY_TARGETS,
-  FONTS, DESIGN_TEMPLATES, BADGE_PRESETS, POSITIONS,
+  FONTS, DESIGN_TEMPLATES, BADGE_PRESETS, POSITIONS, DEFAULT_DESIGN,
   DESIGN_STORAGE_KEY, SAVED_DESIGNS_KEY, loadStoredDesign,
-  loadEditedKitImage, clearEditedKitImage, resolveShapeKey,
+  loadEditedKitImage, clearEditedKitImage, resolveShapeKey, maxTextSizeFor, maxLogoScaleFor,
 } from '../customize/kitShapes';
 import {
   STORAGE_MESSAGE, writeStorage, readSavedDesigns, capSavedDesigns,
@@ -139,6 +139,34 @@ function findKitItem(slug) {
   return null;
 }
 
+/**
+ * textPosition/numberPosition/nameSize/numberSize/logoPosition/logoScale used to be plain fields
+ * on `design`, shared by every garment — nudge the number on a jersey, switch to a headband, and
+ * that exact nudge (now safe-area-mapped, but still THAT nudge) carried straight over, because
+ * there was only ever one copy of these six fields regardless of which garment was active. Each
+ * garment now keeps its own: switching away snapshots the outgoing garment's current values into
+ * garmentMemoryRef (keyed below), and switching in either restores what THIS garment had the last
+ * time it was active in this session, or — the first time it's ever selected — starts from
+ * DEFAULT_DESIGN's values, not whatever the previous garment happened to have.
+ *
+ * Keyed by kitProduct (the label, e.g. "Basketball Headband"), falling back to kitType when there
+ * is no product — the same fallback resolveShapeKey uses, for the same reason: kitProduct is what
+ * actually identifies a specific garment, kitType alone only identifies its pricing/shape family.
+ */
+const GARMENT_TEXT_FIELDS = [
+  'textPosition', 'numberPosition', 'nameSize', 'numberSize', 'logoPosition', 'logoScale',
+];
+
+function garmentKeyFor(kitType, kitProduct) {
+  return kitProduct || kitType;
+}
+
+function pickGarmentFields(source) {
+  const out = {};
+  for (const field of GARMENT_TEXT_FIELDS) out[field] = source[field];
+  return out;
+}
+
 const TABS = [
   { id: 'kit',    label: 'Kit',    icon: <IconKit /> },
   { id: 'colors', label: 'Colors', icon: <IconPalette /> },
@@ -166,9 +194,23 @@ export default function Customize() {
   const [design, setDesign, { undo, redo, canUndo, canRedo }] = useHistoryState(() => {
     const stored = loadStoredDesign();
     const match = findKitItem(searchParams.get('kit'));
-    return match
-      ? { ...stored, kitType: match.item.kitType, kitProduct: match.item.label, sport: match.group.id }
-      : stored;
+    if (!match) return stored;
+    // `stored`'s text/logo fields belong to whatever garment was last customized — carrying them
+    // over unchanged is exactly the bug being fixed, just via a page load instead of a click. If
+    // this link lands on the SAME garment that was already active, keep it (nothing to reset). If
+    // it's a DIFFERENT garment, start those six fields from DEFAULT_DESIGN instead — a fresh
+    // garment gets its true defaults, not the previous garment's customization — then still shrink
+    // (never grow) numberSize/logoScale to fit, in case even the defaults overflow this shape.
+    const sameGarment = garmentKeyFor(stored.kitType, stored.kitProduct)
+      === garmentKeyFor(match.item.kitType, match.item.label);
+    const base = sameGarment ? pickGarmentFields(stored) : pickGarmentFields(DEFAULT_DESIGN);
+    return {
+      ...stored,
+      kitType: match.item.kitType, kitProduct: match.item.label, sport: match.group.id,
+      ...base,
+      numberSize: Math.min(base.numberSize, maxTextSizeFor(match.item.kitType, match.item.label)),
+      logoScale: Math.min(base.logoScale, maxLogoScaleFor(match.item.kitType, match.item.label)),
+    };
   });
   const [activeTab, setActiveTab] = useState('kit');
   const [activeTool, setActiveTool] = useState('select');
@@ -188,6 +230,11 @@ export default function Customize() {
   // Initialised to null (= "last write succeeded") so the first successful autosave on mount is a
   // no-change and does not fire the recovery toast at the user for nothing.
   const lastAutosaveError = useRef(null);
+  // Per-garment memory for text/logo position and size (see GARMENT_TEXT_FIELDS above) — a plain
+  // ref, not state: writing to it must never itself trigger a render, only the patch() that
+  // follows a garment switch should. Session-only by design, same as undo/redo history — it does
+  // not need to survive a reload, only a switch away and back within one visit.
+  const garmentMemoryRef = useRef({});
 
   /**
    * ┌─ EVERY GATED ACTION MUST READ THE DESIGN FROM HERE, NOT FROM THE `design` BINDING ──────────┐
@@ -326,6 +373,30 @@ export default function Customize() {
     setDesign(prev => ({ ...prev, ...partial }));
     invalidateEditedKit();
   }, [setDesign, invalidateEditedKit]);
+
+  /**
+   * The kit-picker's onClick used to be a plain patch({ kitType, kitProduct, sport }) — every
+   * garment sharing the SAME textPosition/numberPosition/nameSize/numberSize/logoPosition/
+   * logoScale fields on `design` meant switching garments carried whatever the previous one had
+   * straight over. This snapshots the OUTGOING garment's six fields into garmentMemoryRef before
+   * switching, then either restores what the INCOMING garment had the last time it was active in
+   * this session, or — first time selected — starts it from DEFAULT_DESIGN, still shrunk (never
+   * grown) to fit via maxTextSizeFor/maxLogoScaleFor in case even the defaults overflow this shape.
+   */
+  const switchGarment = useCallback((kitType, kitProduct, sport) => {
+    const prevKey = garmentKeyFor(design.kitType, design.kitProduct);
+    garmentMemoryRef.current[prevKey] = pickGarmentFields(design);
+
+    const newKey = garmentKeyFor(kitType, kitProduct);
+    const base = garmentMemoryRef.current[newKey] || pickGarmentFields(DEFAULT_DESIGN);
+
+    patch({
+      kitType, kitProduct, sport,
+      ...base,
+      numberSize: Math.min(base.numberSize, maxTextSizeFor(kitType, kitProduct)),
+      logoScale: Math.min(base.logoScale, maxLogoScaleFor(kitType, kitProduct)),
+    });
+  }, [design, patch]);
 
   const patchOpacity = useCallback((target, value) => {
     setDesign(prev => ({ ...prev, opacity: { ...prev.opacity, [target]: value } }));
@@ -477,28 +548,6 @@ export default function Customize() {
   const guardedUpload = gated('customize:upload', 'upload a logo', openFilePicker);
   const guardedAddToCart = gated('customize:add-to-cart', 'add this design to your cart', handleAddToCart);
 
-  /**
-   * THE WRITE IS A PRECONDITION OF NAVIGATING, not a side effect of it.
-   *
-   * Checkout has no route state — it rebuilds the design by calling loadStoredDesign(), which
-   * reads this exact key. So if this write fails and we navigate anyway, checkout silently loads
-   * whatever was stored BEFORE (or DEFAULT_DESIGN if nothing was), and the customer orders and
-   * pays for a kit they did not design. Nothing anywhere would show that it had happened.
-   *
-   * Blocking here is the least-bad outcome: the user keeps their design on screen and gets a
-   * message they can act on, instead of a wrong kit arriving weeks later.
-   */
-  const handlePlaceOrder = useCallback(() => {
-    const failure = writeStorage(DESIGN_STORAGE_KEY, JSON.stringify(design));
-
-    if (failure) {
-      showError(`${STORAGE_MESSAGE[failure]} We can't start checkout until it saves.`);
-      return;
-    }
-
-    navigate('/checkout');
-  }, [design, navigate, showError]);
-
   const kitLabel = design.kitProduct || KIT_TYPES.find(k => k.id === design.kitType)?.label || 'Jersey';
 
   return (
@@ -529,9 +578,6 @@ export default function Customize() {
               upload to wait on here and no spinner to show. */}
           <button onClick={guardedAddToCart} className={`btn btn-grey ${exportBtnCls}`}>
             Add to Cart
-          </button>
-          <button onClick={handlePlaceOrder} className={`btn btn-darkred ${exportBtnCls}`}>
-            Place Order
           </button>
         </div>
       </div>
@@ -630,7 +676,7 @@ export default function Customize() {
 
           <div className={panelCls}>
             {activeTab === 'kit' && (
-              <KitPanel design={design} patch={patch} initialKitSlug={searchParams.get('kit')} side={side} />
+              <KitPanel design={design} patch={patch} switchGarment={switchGarment} initialKitSlug={searchParams.get('kit')} side={side} />
             )}
 
             {activeTab === 'colors' && (
@@ -737,7 +783,7 @@ function UnitDropdown({ value, onChange }) {
   );
 }
 
-function KitPanel({ design, patch, initialKitSlug, side }) {
+function KitPanel({ design, patch, switchGarment, initialKitSlug, side }) {
   const [expandedSport, setExpandedSport] = useState(() => findKitItem(initialKitSlug)?.group.id ?? null);
   const activeGroup = SPORT_KIT_GROUPS.find(g => g.id === expandedSport);
   const [showAllTemplates, setShowAllTemplates] = useState(false);
@@ -769,7 +815,7 @@ function KitPanel({ design, patch, initialKitSlug, side }) {
               {activeGroup.items.map(item => (
                 <button
                   key={item.id}
-                  onClick={() => patch({ kitType: item.kitType, kitProduct: item.label, sport: activeGroup.id })}
+                  onClick={() => switchGarment(item.kitType, item.label, activeGroup.id)}
                   className={kitBtnCls(design.kitProduct === item.label)}
                 >
                   <img src={side === 'back' && item.imageBack ? item.imageBack : item.image} alt={item.label} className={kitThumbCls} />
@@ -1023,11 +1069,11 @@ function TextPanel({ design, patch, side, setSide }) {
         <div className={posRowCls}>
           <div className={posColCls}>
             <span className={posColLabelCls}>Name</span>
-            <PositionGrid value={design.textPosition} onChange={v => patch({ textPosition: v })} />
+            <PositionGrid value={design.textPosition[side]} onChange={v => patch({ textPosition: { ...design.textPosition, [side]: v } })} />
           </div>
           <div className={posColCls}>
             <span className={posColLabelCls}>Number</span>
-            <PositionGrid value={design.numberPosition} onChange={v => patch({ numberPosition: v })} />
+            <PositionGrid value={design.numberPosition[side]} onChange={v => patch({ numberPosition: { ...design.numberPosition, [side]: v } })} />
           </div>
         </div>
       </div>

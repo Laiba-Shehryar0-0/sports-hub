@@ -1,4 +1,4 @@
-// Snapshot of ../kit-frontend as of 2026-08-13 — reference only, do not edit here.
+// Snapshot of ../kit-frontend as of 2026-08-14 — reference only, do not edit here.
 // Source: src/pages/Checkout.jsx
 
 import { useState, useCallback, useEffect, useRef } from 'react';
@@ -16,7 +16,7 @@ import {
   KIT_TYPES, DELIVERY_METHODS, PAYMENT_METHODS,
 } from '../customize/kitShapes';
 import {
-  IconChevronLeft, IconLock, IconTruck, IconCard, IconBank, IconCash,
+  IconChevronLeft, IconLock, IconTruck, IconBank, IconCash,
   IconShield, IconCheck,
 } from '../customize/icons';
 
@@ -55,8 +55,7 @@ export default function Checkout() {
   const [contact, setContact] = useState({ firstName: '', lastName: '', email: '', phone: '', clubName: '' });
   const [address, setAddress] = useState({ street: '', city: '', province: '', postalCode: '', country: 'Pakistan' });
 
-  const [paymentId, setPaymentId] = useState('card');
-  const [card, setCard] = useState({ number: '', expiry: '', cvv: '', name: '' });
+  const [paymentId, setPaymentId] = useState('bank');
 
   const [errors, setErrors] = useState({});
   /** null until an order is placed, then the SERVER's response — reference, id and pricing. */
@@ -117,7 +116,6 @@ export default function Checkout() {
   const setField = (setter) => (key, value) => setter(prev => ({ ...prev, [key]: value }));
   const setContactField = setField(setContact);
   const setAddressField = setField(setAddress);
-  const setCardField = setField(setCard);
 
   /**
    * Changing country can invalidate the selected delivery method, so they move together.
@@ -134,19 +132,12 @@ export default function Checkout() {
       firstName: contact.firstName, lastName: contact.lastName,
       email: contact.email, phone: contact.phone,
       street: address.street, city: address.city,
-      cardNumber: card.number, cardExpiry: card.expiry, cardCvv: card.cvv, cardName: card.name,
     };
     const schema = {
       firstName: [required()], lastName: [required()],
       email: [required()], phone: [required()],
       street: [required()], city: [required()],
     };
-    if (paymentId === 'card') {
-      schema.cardNumber = [required()];
-      schema.cardExpiry = [required()];
-      schema.cardCvv = [required()];
-      schema.cardName = [required()];
-    }
     const nextErrors = validateFields(values, schema);
     setErrors(nextErrors);
     if (Object.keys(nextErrors).length > 0) {
@@ -186,7 +177,7 @@ export default function Checkout() {
     } finally {
       setSubmitting(false);
     }
-  }, [items, contact, address, paymentId, card, deliveryId, instructions, priced, clearCart]);
+  }, [items, contact, address, paymentId, deliveryId, instructions, priced, clearCart]);
 
   return (
     <div className="min-h-[calc(100vh-72px)] mt-[72px] bg-surface-800 pb-16">
@@ -324,7 +315,6 @@ export default function Checkout() {
                   onClick={() => setPaymentId(p.id)}
                   className={`flex-1 flex items-center justify-center gap-2 p-3 border-[1.5px] text-[12px] font-bold rounded-md cursor-pointer transition-[all_180ms_ease] ${paymentId === p.id ? 'border-onsurface-100 text-onsurface-100 bg-surface-600' : 'bg-surface-600 border-line text-onsurface-400 hover:border-onsurface-400 hover:text-onsurface-100'}`}
                 >
-                  {p.id === 'card' && <IconCard />}
                   {p.id === 'bank' && <IconBank />}
                   {p.id === 'cod' && <IconCash />}
                   {p.label}
@@ -332,17 +322,6 @@ export default function Checkout() {
               ))}
             </div>
 
-            {paymentId === 'card' && (
-              <div className="flex flex-col gap-4">
-                <TextField label="Card Number" required placeholder="1234 5678 9012 3456" value={card.number} error={errors.cardNumber} onChange={v => { setCardField('number', v); setErrors(e => ({ ...e, cardNumber: false })); }} />
-                <div className="grid grid-cols-2 gap-4 max-[640px]:grid-cols-1">
-                  <TextField label="Expiry Date" required placeholder="MM / YY" value={card.expiry} error={errors.cardExpiry} onChange={v => { setCardField('expiry', v); setErrors(e => ({ ...e, cardExpiry: false })); }} />
-                  <TextField label="CVV" required placeholder="•••" maxLength={4} value={card.cvv} error={errors.cardCvv} onChange={v => { setCardField('cvv', v); setErrors(e => ({ ...e, cardCvv: false })); }} />
-                </div>
-                <TextField label="Name on Card" required placeholder="Full name as on card" value={card.name} error={errors.cardName} onChange={v => { setCardField('name', v); setErrors(e => ({ ...e, cardName: false })); }} />
-                <p className="text-[11.5px] text-onsurface-600 leading-[1.6] flex items-center gap-[6px] [&>svg]:w-[13px] [&>svg]:h-[13px] [&>svg]:flex-shrink-0"><IconLock /> Your payment details are encrypted with 256-bit SSL. We never store card data.</p>
-              </div>
-            )}
             {paymentId === 'bank' && (
               <p className="text-[11.5px] text-onsurface-600 leading-[1.6]">Bank transfer details will be emailed after you place the order. Orders are produced once payment is confirmed.</p>
             )}
@@ -497,6 +476,10 @@ function TextField({ label, required, type = 'text', placeholder, value, onChang
         onChange={e => onChange(e.target.value)}
         className={error ? `${inputCls} border-red-light` : inputCls}
       />
+      {/* error is a validator's message string (or `false` while clean — see validateFields), so
+          this was always the actual reason the field failed; it just was never rendered. A red
+          border alone doesn't tell a user WHICH of "empty", "wrong format" or "expired" applies. */}
+      {error && <p role="alert" className="text-[11px] text-red-light">{error}</p>}
     </div>
   );
 }

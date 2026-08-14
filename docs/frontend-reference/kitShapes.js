@@ -1,4 +1,4 @@
-// Snapshot of ../kit-frontend as of 2026-08-13 — reference only, do not edit here.
+// Snapshot of ../kit-frontend as of 2026-08-14 — reference only, do not edit here.
 // Source: src/customize/kitShapes.js
 
 /**
@@ -147,7 +147,6 @@ export const QUANTITY_PRESETS = [
 ];
 
 export const PAYMENT_METHODS = [
-  { id: 'card', label: 'Card' },
   { id: 'bank', label: 'Bank Transfer' },
   { id: 'cod',  label: 'Cash on Delivery' },
 ];
@@ -170,8 +169,11 @@ export const DEFAULT_DESIGN = {
   font: 'Bebas Neue',
   nameSize: 14,
   numberSize: 46,
-  textPosition: { x: 0.50, y: 0.38 },
-  numberPosition: { x: 0.50, y: 0.58 },
+  // Split by side, like playerName/playerNumber above — moving the name on the back must not
+  // move it on the front. logoPosition stays a single {x,y}: the logo only ever renders on the
+  // front (KitPreview hardcodes side === 'front' for it), so there is no back position to diverge.
+  textPosition: { front: { x: 0.50, y: 0.38 }, back: { x: 0.50, y: 0.38 } },
+  numberPosition: { front: { x: 0.50, y: 0.58 }, back: { x: 0.50, y: 0.58 } },
   logoDataUrl: null,
   logoPreset: null,
   logoScale: 80,
@@ -282,23 +284,55 @@ function normalizeBySide(value, fallback) {
   return fallback;
 }
 
+/** Migrates a legacy shared (non-side-specific) {x,y} position — or an even older POSITIONS id
+ *  string, via normalizePosition — to the {front,back} shape. The same value is applied to both
+ *  sides so a design saved before this fix still looks exactly as it did; front and back only
+ *  start diverging from the next time either one is moved. */
+function normalizeBySidePosition(value, fallback) {
+  if (value && typeof value === 'object' && ('front' in value || 'back' in value)) {
+    return {
+      front: normalizePosition(value.front, fallback.front),
+      back: normalizePosition(value.back, fallback.back),
+    };
+  }
+  const shared = normalizePosition(value, null);
+  return shared ? { front: shared, back: shared } : fallback;
+}
+
+/**
+ * Migrates a possibly-legacy design object — whatever shape it was written in, at whatever point
+ * in the contract's history that was — to the current DEFAULT_DESIGN-compatible shape.
+ *
+ * THE ONLY PLACE THIS LOGIC LIVES. `loadStoredDesign` (the single in-progress design) and
+ * `cart.js`'s `readCart` (every cart line) both read designs that may predate a contract change —
+ * textPosition/numberPosition's {x,y} -> {front,back} split is the one that has actually bitten so
+ * far: a cart line added before that shipped still has the old flat shape, and the backend's
+ * strict schema now requires {front,back}, so quoting that cart failed with a raw zod
+ * "Front: Required" — a validation error with no way for the user to act on it, since nothing in
+ * the UI lets them "fix" a field they never touched. Both call sites need the SAME migration, not
+ * two hand-copied versions of it that can drift the way the position split itself once did.
+ */
+export function migrateDesign(parsed) {
+  if (!parsed || typeof parsed !== 'object') return DEFAULT_DESIGN;
+  return {
+    ...DEFAULT_DESIGN,
+    ...parsed,
+    opacity: { ...DEFAULT_DESIGN.opacity, ...(parsed.opacity || {}) },
+    layers: { ...DEFAULT_DESIGN.layers, ...(parsed.layers || {}) },
+    textPosition: normalizeBySidePosition(parsed.textPosition, DEFAULT_DESIGN.textPosition),
+    numberPosition: normalizeBySidePosition(parsed.numberPosition, DEFAULT_DESIGN.numberPosition),
+    logoPosition: normalizePosition(parsed.logoPosition, DEFAULT_DESIGN.logoPosition),
+    playerName: normalizeBySide(parsed.playerName, DEFAULT_DESIGN.playerName),
+    playerNumber: normalizeBySide(parsed.playerNumber, DEFAULT_DESIGN.playerNumber),
+  };
+}
+
 /** Reads the last-edited kit design from localStorage, merged onto DEFAULT_DESIGN */
 export function loadStoredDesign() {
   try {
     const raw = localStorage.getItem(DESIGN_STORAGE_KEY);
     if (!raw) return DEFAULT_DESIGN;
-    const parsed = JSON.parse(raw);
-    return {
-      ...DEFAULT_DESIGN,
-      ...parsed,
-      opacity: { ...DEFAULT_DESIGN.opacity, ...(parsed.opacity || {}) },
-      layers: { ...DEFAULT_DESIGN.layers, ...(parsed.layers || {}) },
-      textPosition: normalizePosition(parsed.textPosition, DEFAULT_DESIGN.textPosition),
-      numberPosition: normalizePosition(parsed.numberPosition, DEFAULT_DESIGN.numberPosition),
-      logoPosition: normalizePosition(parsed.logoPosition, DEFAULT_DESIGN.logoPosition),
-      playerName: normalizeBySide(parsed.playerName, DEFAULT_DESIGN.playerName),
-      playerNumber: normalizeBySide(parsed.playerNumber, DEFAULT_DESIGN.playerNumber),
-    };
+    return migrateDesign(JSON.parse(raw));
   } catch {
     return DEFAULT_DESIGN;
   }
@@ -338,6 +372,12 @@ export const PRODUCT_SHAPES = {
   'Training Bib':      'sleeveless',
   'Goalkeeper Shirt':  'long-sleeve',
   'Cycling Shirt':     'zip-top',
+  'Tracksuit':         'hoodie',
+  'Warm-up Suit':      'hoodie',
+  'Cricket Sweater':   'sweater',
+  'Cricket Trousers':  'trousers',
+  'Basketball Headband': 'headband',
+  'Rugby Shirt':       'polo',
 };
 
 /**
@@ -350,6 +390,18 @@ export const PRODUCT_SHAPES = {
 export function resolveShapeKey(kitType, kitProduct = null) {
   return (kitProduct && PRODUCT_SHAPES[kitProduct]) || kitType;
 }
+
+/**
+ * The actual sleeve outline for the three long-sleeved tops (long-sleeve, hoodie, sweater share
+ * identical arm points), as two closed polygons traced from each shape's own body path — shoulder
+ * to underarm, the same points the body already uses. Consumed by KitPreview's "Sleeves" template:
+ * the generic fractional wedge it falls back to for short-sleeve shapes only reaches 0.35 of the
+ * garment's height, so a long sleeve painted with it gets colour on the cap and bare body-colour
+ * from the elbow down. Passing this instead clips the accent to the real sleeve, full length.
+ */
+const LONG_SLEEVE_ZONE =
+  'M 246,52 L 288,88 L 296,150 L 278,225 L 260,268 L 238,264 L 242,185 L 248,106 Z ' +
+  'M 54,52 L 12,88 L 4,150 L 22,225 L 40,268 L 62,264 L 58,185 L 52,106 Z';
 
 /**
  * Returns SVG path/viewBox data for a garment.
@@ -436,6 +488,7 @@ export function getKitPath(type, kitProduct = null) {
         w: 300, h: 360,
         body: 'M 112,38 Q 150,72 188,38 L 246,52 L 288,88 L 296,150 L 278,225 L 260,268 L 238,264 L 242,185 L 248,106 L 248,316 L 52,316 L 52,106 L 58,185 L 62,264 L 40,268 L 22,225 L 4,150 L 12,88 L 54,52 Z',
         collar: 'M 112,38 Q 131,42 150,70 Q 169,42 188,38 L 176,44 L 150,70 L 124,44 Z',
+        sleeveZone: LONG_SLEEVE_ZONE,
       };
     /**
      * Close-fitting short sleeve with a centre zip — Cycling Shirt.
@@ -466,15 +519,106 @@ export function getKitPath(type, kitProduct = null) {
         collar: 'M 112,38 Q 131,42 150,70 Q 169,42 188,38 L 176,44 L 150,70 L 124,44 Z',
         zip: true,
       };
+    /**
+     * Long sleeve with a hood — Tracksuit, Warm-up Suit.
+     *
+     * PROVENANCE: hand-written, same coordinate space as the other tops, not traced. The audit
+     * (docs/kit-shape-audit.md §4) specs this as long-sleeved, so the sleeve run is the
+     * `long-sleeve` shape's above, reused unchanged — shoulder ends (246,52)/(54,52), the taper
+     * through the forearm, and underarm (248,106)/(52,106) — along with the same torso sides and
+     * hem corners every top shares.
+     *
+     * The neck is what changes. Every other top's top edge is `Q 150,72 188,38` — a curve that
+     * DIPS below the 38-baseline into the collar notch. A hood can't be that: it has to rise ABOVE
+     * the shoulder line instead of cutting into it, or it isn't a hood, it's a collar. So the hood
+     * base sits a little outside and below the plain neck corners — (108,40) and (192,40), 4 units
+     * wider each side, 2 lower — and a cubic arcs up to control points directly above each base
+     * (108,4)/(192,4) before descending back down, the same construction the brief's own example
+     * curve uses. Apex lands at y≈11 by the curve's own math: 27 units above the neckline, inside
+     * the brief's 20-30 range.
+     *
+     * No `collar` here, deliberately: the hood's fabric covers the neck opening in the silhouette,
+     * so the V-neck trim every other top draws inside 112-188 would float inside a dome that no
+     * longer has a matching cutout. A hood replaces the neckline; it doesn't sit inside one.
+     */
+    case 'hoodie':
+      return {
+        family: 'top',
+        viewBox: '0 0 300 360',
+        w: 300, h: 360,
+        body: 'M 108,40 C 108,4 192,4 192,40 L 246,52 L 288,88 L 296,150 L 278,225 L 260,268 L 238,264 L 242,185 L 248,106 L 248,316 L 52,316 L 52,106 L 58,185 L 62,264 L 40,268 L 22,225 L 4,150 L 12,88 L 54,52 Z',
+        sleeveZone: LONG_SLEEVE_ZONE,
+      };
+    /**
+     * V-neck, long sleeve, ribbed cuffs and hem — Cricket Sweater.
+     *
+     * PROVENANCE: hand-written, same coordinate space as the other tops, not traced.
+     *
+     * ┌─ WHY THIS IS A NEW CASE, NOT jumper REWRITTEN IN PLACE ──────────────────────────────────┐
+     * │ docs/kit-shape-audit.md §4 calls this a "REWRITE of jumper" as a design decision, but      │
+     * │ `jumper` is the literal kitType value, and any stored design with kitType 'jumper' and no  │
+     * │ kitProduct (or an unrecognized one) resolves through the fallback straight to that case.   │
+     * │ Overwriting it in place would silently reshape those — the same class of bug the shape-key │
+     * │ tagging on loadEditedKitImage exists to prevent. So `jumper` is untouched below, and this   │
+     * │ is a sibling case reached only via PRODUCT_SHAPES['Cricket Sweater'], the same pattern      │
+     * │ `long-sleeve` uses for Goalkeeper Shirt against the plain `jersey` case.                    │
+     * └────────────────────────────────────────────────────────────────────────────────────────────┘
+     *
+     * Sleeves, underarm, torso sides and hem corners are `long-sleeve`'s, reused unchanged — the
+     * audit specs long sleeve, not jumper's own (already too-short) cap sleeve.
+     *
+     * The neck is a real V: two straight lines from the plain neck corners (112,40)/(188,40) down
+     * to a point at (150,120) — 82 units below the neckline, deep enough to read as a V rather than
+     * jersey's 34-unit crew scoop. `collar` traces a thin ribbed band just inside that V, the same
+     * outer-curve/inner-curve construction jersey's own collar uses, just following straight V
+     * edges instead of a curve.
+     *
+     * `hem` and `cuffs` are both new ribbed-band elements, presence-driven like `placket`/`zip`:
+     * `hem` is a 20-unit band sitting inside the existing 316 hem line (not below it — the old
+     * jumper's defect was extending the hem 40 units past every other top's; this stays inside the
+     * shared anchor instead of moving it). `cuffs` is one path with two closed sub-paths, a thin
+     * band angled across each wrist near the existing long-sleeve cuff points. KitBody renders it
+     * with `sleeveColor`, matching how `hem` is already rendered — both are knit-trim colored by
+     * the sleeve accent, not the collar accent.
+     */
+    case 'sweater':
+      return {
+        family: 'top',
+        viewBox: '0 0 300 360',
+        w: 300, h: 360,
+        body: 'M 112,40 L 150,120 L 188,40 L 246,52 L 288,88 L 296,150 L 278,225 L 260,268 L 238,264 L 242,185 L 248,106 L 248,316 L 52,316 L 52,106 L 58,185 L 62,264 L 40,268 L 22,225 L 4,150 L 12,88 L 54,52 Z',
+        collar: 'M 116,42 L 150,110 L 184,42 L 178,46 L 150,102 L 122,46 Z',
+        hem: 'M 52,296 L 248,296 L 248,316 L 52,316 Z',
+        cuffs: 'M 266,246 L 260,268 L 238,264 L 244,242 Z M 34,246 L 40,268 L 62,264 L 56,242 Z',
+        sleeveZone: LONG_SLEEVE_ZONE,
+      };
+    /**
+     * COLLAR STRENGTHENED — Cricket Shirt, Rugby Shirt.
+     *
+     * docs/kit-shape-audit.md §2 traced the "polo looks like jersey" complaint to its actual
+     * cause: the collar/placket/buttons were never absent, they just fall below one device pixel
+     * at the 88×88 cart thumbnail (a 4-unit placket, r=2.4 buttons, in a 300-wide viewBox). So this
+     * is a legibility fix, not a new shape — body is byte-identical to jersey's, unchanged.
+     *
+     *   collar: outer tips moved from x=114/186 to x=90/210 (120 units wide, was 72) and the front
+     *           notch deepened from y=64 to y=90 — a collar that reads as two wings at thumbnail
+     *           size instead of a sliver.
+     *   placket: widened from a 4-unit to a 8-unit rectangle.
+     *   buttons: KitPreview's button circles are drawn at a hardcoded radius shared by every shape
+     *            that sets `buttons` — bumped there from r=2.4 to r=5 (still polo-only today).
+     *
+     * PRODUCT_SHAPES now also routes Rugby Shirt here — kitType stays 'jersey' (pricing untouched),
+     * only the rendered shape changes, same pattern as long-sleeve/Goalkeeper Shirt.
+     */
     case 'polo':
       return {
         family: 'top',
         viewBox: '0 0 300 360',
         w: 300, h: 360,
         body: 'M 112,38 Q 150,72 188,38 L 246,52 L 288,88 L 296,124 L 268,138 L 248,106 L 248,316 L 52,316 L 52,106 L 32,138 L 4,124 L 12,88 L 54,52 Z',
-        collar: 'M 114,40 L 132,38 L 150,64 L 168,38 L 186,40 L 168,54 L 150,72 L 132,54 Z',
-        placket: 'M 148,60 L 152,60 L 152,104 L 148,104 Z',
-        buttons: [[150, 72], [150, 90]],
+        collar: 'M 90,44 L 126,36 L 150,90 L 174,36 L 210,44 L 178,58 L 150,80 L 122,58 Z',
+        placket: 'M 146,56 L 154,56 L 154,112 L 146,112 Z',
+        buttons: [[150, 76], [150, 98]],
         cx: 150, cy: 200, r: 58,
       };
     case 'jumper':
@@ -494,30 +638,231 @@ export function getKitPath(type, kitProduct = null) {
         w: 280, h: 200,
         body: 'M 20,10 L 260,10 L 240,190 L 170,190 L 140,100 L 110,190 L 40,190 Z',
         waistband: 'M 20,10 L 260,10 L 260,35 L 20,35 Z',
+        // The default number position (fraction 0.5, 0.58) lands at y=116 on this 200-tall box —
+        // straight into the crotch notch between the two legs (fork tip at y=100), off the fabric
+        // entirely. Confined to the waist/hip trapezoid above the fork: at its narrowest point
+        // here (y=88, just above the fork) the garment spans roughly x=29-251, so x0/x1 sit with
+        // margin inside that on both sides at every y in the range.
+        textSafeArea: { x0: 45, y0: 18, x1: 235, y1: 88 },
         cx: 140, cy: 120, r: 36,
       };
+    /**
+     * Full-length legs, narrow taper — Cricket Trousers.
+     *
+     * PROVENANCE: hand-written from the `shorts` body above, not traced. `shorts` is landscape
+     * (`0 0 280 200`) — full-length legs squashed into that box read as shorts, the exact defect
+     * being fixed, so this is the one shape in the set that gets its own portrait viewBox,
+     * `0 0 280 420` (signed off separately — see docs/kit-shape-audit.md §3). It adds a category
+     * rather than resizing one: every other viewBox in this file is unchanged.
+     *
+     * Waistband, both thighs and the crotch point are `shorts`' own anchors, reused verbatim:
+     * (20,10)/(260,10) waist corners, (240,190)/(40,190) outer thighs, (170,190)/(110,190) inner
+     * thighs, (140,100) crotch. `shorts` stops there because it's shorts; trousers keeps going.
+     *
+     * REVISED: the first pass tapered each leg edge through two straight segments (thigh -> a
+     * point at y=300 -> a 28-unit ankle). Two straight segments meeting at a fixed point draws a
+     * visible kink at y=300 — reads as a knee bump, not a seam — and 28 units against a 70-unit
+     * thigh is skinny-fit, not the regular cut cricket trousers actually are. Each edge is now one
+     * quadratic curve from thigh straight to ankle (control point at y=300, pulled slightly wider
+     * than the straight-line interpolation for a natural convex taper instead of a faceted one),
+     * and the hem widened to 40 units — 57% of thigh width, a relaxed leg rather than a pin-leg.
+     */
+    case 'trousers':
+      return {
+        family: 'legs',
+        viewBox: '0 0 280 420',
+        w: 280, h: 420,
+        body: 'M 20,10 L 260,10 L 240,190 Q 230,300 218,405 L 178,405 Q 174,300 170,190 L 140,100 L 110,190 Q 106,300 102,405 L 62,405 Q 50,300 40,190 Z',
+        waistband: 'M 20,10 L 260,10 L 260,35 L 20,35 Z',
+        // Same geometry, same safe area as `shorts` above — the default position fraction would
+        // land in the crotch fork here too, and worse: on a 420-tall box a name meant for a
+        // 200-tall garment lands even further down, past the fork and into the leg gap entirely.
+        textSafeArea: { x0: 45, y0: 18, x1: 235, y1: 88 },
+      };
+    /**
+     * REWORKED AGAIN for clarity — Team Socks.
+     *
+     * The first rework gave the foot an actual bend, but did it with SIX small Q segments (three
+     * per side: instep/toe on one edge, heel on the other), each only 15-25 units long. At full
+     * size that reads as intended; at the 88x88 cart thumbnail six short curves in a row blur into
+     * visual noise rather than one clean toe-and-heel silhouette. Down to FOUR Q's total — one
+     * curve per named feature (instep, toe, heel-under, heel-back) — each spanning the same
+     * distance the old three-segment runs did, so the outline is no less rounded, just built from
+     * fewer, longer strokes. Toe reach pulled in from x=160 (2 units from the 160-wide viewBox
+     * edge — touching it) to x=154, and the tube shortened from y=165 to y=160 to match.
+     */
     case 'socks':
       return {
         family: 'socks',
         viewBox: '0 0 160 300',
         w: 160, h: 300,
-        body: 'M 32,8 L 128,8 L 128,180 Q 128,206 150,218 Q 158,224 153,244 L 142,282 Q 136,300 108,300 L 52,300 Q 26,300 20,282 L 11,244 Q 6,224 22,216 Q 32,204 32,180 Z',
-        cuff: 'M 32,8 L 128,8 L 128,42 L 32,42 Z',
+        body: 'M 40,10 L 120,10 L 120,160 Q 150,163 152,198 Q 154,232 118,244 L 60,244 Q 22,244 20,214 Q 18,180 40,160 Z',
+        cuff: 'M 40,10 L 120,10 L 120,38 L 40,38 Z',
+        // Text stays on the leg tube — the only straight-walled, constant-width part of the
+        // shape. Below y=152 the outline starts curving out toward the foot, so a name/number
+        // placed there would straddle the boundary rather than sit on fabric.
+        textSafeArea: { x0: 44, y0: 45, x1: 116, y1: 152 },
         cx: 80, cy: 130, r: 30,
       };
+    /**
+     * BRIM STRAIGHTENED — Cricket Cap.
+     *
+     * The old brim ('M 10,130 L 240,130 Q 260,130 265,140 Q 270,150 260,155 L 10,155 Z') was a
+     * straight strip that only curved out on its RIGHT end (to x=265), while the dome, band and
+     * button above it are all symmetric about x=150. A cap viewed from the front has its peak
+     * pointing straight at the viewer, not off to one side — the asymmetry read as a drawing
+     * error, not a brim in perspective. Rebuilt as two Q curves sharing the same endpoints
+     * (20,132)/(280,132): the bottom edge dips to y≈156 at centre (the visible curved leading
+     * edge), the top edge dips only to y≈136 (where it meets the band), so the brim is thick in
+     * the middle and tapers to a point at both ends — symmetric, and it reads as a peak rather
+     * than a flag.
+     */
     case 'cap':
       return {
         family: 'head',
         viewBox: '0 0 300 200',
         w: 300, h: 200,
         dome: 'M 30,120 Q 30,20 150,20 Q 270,20 270,120 Z',
-        brim: 'M 10,130 L 240,130 Q 260,130 265,140 Q 270,150 260,155 L 10,155 Z',
+        brim: 'M 20,132 Q 150,180 280,132 Q 150,140 20,132 Z',
         band: 'M 30,118 Q 30,108 150,108 Q 270,108 270,118 L 270,128 Q 270,132 150,132 Q 30,132 30,128 Z',
         button: 'M 150,20 m -8,-8 a 8,8 0 1,0 16,0 a 8,8 0 1,0 -16,0 Z',
+        // Confined to the dome's interior, well clear of both the peak (the arch narrows sharply
+        // above y≈48) and the band/brim below (y=108+). Checked against the arch curve itself: at
+        // y=48 the dome spans roughly x=56-244, and it only widens moving down toward y=106, so a
+        // box from y=48 sits inside the arch at every y in its range, not just at the sampled one.
+        textSafeArea: { x0: 75, y0: 48, x1: 225, y1: 106 },
         cx: 150, cy: 80, r: 32,
+      };
+    /**
+     * A band — no peak, no button — Basketball Headband.
+     *
+     * PROVENANCE: hand-written, same coordinate space and viewBox as `cap` (`0 0 300 200`, wide
+     * and short — fits an unrolled band comfortably, no new box needed). Not derived from `cap`'s
+     * `dome`, which is a tall peaked arch built for a brim and a button; a headband is neither, and
+     * stretching that shape into one is the exact defect this replaces (the old fallback rendered
+     * Basketball Headband as a peaked cap, brim and button included). `family: 'head'` reads `dome`
+     * unconditionally, and `brim`/`band`/`button` are already presence-driven (`kit.brim &&`, etc.
+     * in KitBody) — omitting all three is what removes the peak and the button, with no KitBody
+     * change needed.
+     *
+     * REWORKED for clarity: the first pass's two edges shared endpoints but not curvature — the
+     * top arced from y=65 to y=95 (30 units) while the bottom arced from y=140 to y=170 (also 30,
+     * but starting 45 units lower) — so the band came out 40 units thick at the ends and 105 thick
+     * at the centre. That reads as a thick crescent/blob, not an elastic band of roughly constant
+     * width. The two edges below use the SAME curve shape (arcing up through the middle by the
+     * same 30 units), just offset by a constant 40-unit baseline — top edge y 60-90, bottom edge y
+     * 100-130 — so the band is a uniform 40 units thick everywhere along its length, tapering only
+     * at the two straight end caps.
+     */
+    case 'headband':
+      return {
+        family: 'head',
+        viewBox: '0 0 300 200',
+        w: 300, h: 200,
+        dome: 'M 20,90 Q 150,60 280,90 L 280,130 Q 150,100 20,130 Z',
+        // The band itself is only ~40 units thick, so there is far less usable room than the
+        // 300x200 box suggests — checked at the box's own left/right edges (x=110/190, the
+        // tightest points since the band is narrowest away from centre): the top curve sits at
+        // y≈76 there, comfortably above this box's y0=80, and the bottom curve (built as the top
+        // curve offset +40) sits at y≈116, comfortably below y1=112.
+        textSafeArea: { x0: 110, y0: 80, x1: 190, y1: 112 },
       };
     default:
       console.warn(`[kitShapes] Unknown shape for kitType "${type}" / product "${kitProduct}" — falling back to jersey.`);
       return getKitPath('jersey');
   }
+}
+
+/**
+ * A name/number is capped, in KitPreview, at this fraction of whichever of a shape's own
+ * dimensions is smaller — nameSize/numberSize are flat point values shared by the sliders across
+ * every one of the twelve shapes' very different boxes (jersey 300x360 down to socks 160x300), so
+ * an uncapped slider on a small shape can dwarf the garment it's printed on. Exported as one
+ * constant, not duplicated as a literal in both KitPreview (the render-time clamp) and
+ * `maxTextSizeFor` below (the garment-switch readjustment) — two copies of "0.35" is exactly the
+ * kind of pair that quietly drifts apart the next time one gets tuned and the other doesn't.
+ */
+export const MAX_TEXT_FRACTION = 0.35;
+
+/**
+ * Used instead of MAX_TEXT_FRACTION when a shape defines `textSafeArea`. That box is already
+ * cropped down to actual fabric — unlike the full viewBox, which for socks/shorts/trousers/
+ * cap/headband includes plenty of space the garment doesn't occupy (the crotch gap, the area
+ * outside a cap's dome, everything outside a headband's thin band) — so it doesn't need
+ * MAX_TEXT_FRACTION's wide margin for error. A bit more generous, since the box is already safe.
+ */
+export const SAFE_AREA_TEXT_FRACTION = 0.45;
+
+/**
+ * The box text is actually confined to for this shape: `textSafeArea` when the shape defines one,
+ * or the full viewBox otherwise. A generic fraction of `kit.w`/`kit.h` assumes the garment fills
+ * its own box, which is true for every top (the torso already occupies most of its 300x360) but
+ * false for socks/shorts/trousers/cap/headband — a name positioned by that same fraction can land
+ * in the crotch gap between two shorts legs, or outside a headband's band entirely, no matter how
+ * small the font is capped to. `textSafeArea` is the box that's actually always fabric.
+ */
+export function textBoxFor(kitType, kitProduct = null) {
+  const kit = getKitPath(kitType, kitProduct);
+  const area = kit.textSafeArea;
+  return area
+    ? { x0: area.x0, y0: area.y0, w: area.x1 - area.x0, h: area.y1 - area.y0, constrained: true }
+    : { x0: 0, y0: 0, w: kit.w, h: kit.h, constrained: false };
+}
+
+/**
+ * The largest a name/number can render on THIS shape without exceeding it. Exposed so a garment
+ * switch can shrink an already-too-big numberSize down to fit the NEW garment immediately, rather
+ * than leaving the stored value oversized and relying purely on the render-time clamp to silently
+ * hide it. Floored to an integer: nameSize/numberSize are always whole numbers, and a fractional
+ * cap would let the slider land one pixel over.
+ *
+ * On a constrained shape, name and number each get HALF the safe area's height (KitPreview splits
+ * it top/bottom — see its own comment), not the full height each: the area is small enough on
+ * these shapes (headband: 32 units total) that both mapping onto the SAME full range landed only a
+ * few units apart and visibly overlapped. The cap has to shrink to match, or the two would still
+ * be sized as if each owned the whole box while actually sharing half of it.
+ */
+export function maxTextSizeFor(kitType, kitProduct = null) {
+  const box = textBoxFor(kitType, kitProduct);
+  const fraction = box.constrained ? SAFE_AREA_TEXT_FRACTION : MAX_TEXT_FRACTION;
+  const h = box.constrained ? box.h / 2 : box.h;
+  return Math.floor(Math.min(box.w, h) * fraction);
+}
+
+/**
+ * The largest a logo badge can render on THIS shape without exceeding it — same idea as
+ * maxTextSizeFor, but unhalved: the logo is front-only and doesn't split its region with name or
+ * number the way they now split with each other (see maxTextSizeFor's own comment), so it gets the
+ * safe area's FULL height, not half. Exposed for the same reason maxTextSizeFor is: a garment
+ * switch shrinks an already-too-big logoScale down to fit the NEW garment immediately, rather than
+ * leaving the stored value oversized and relying purely on the render-time clamp to hide it.
+ */
+export function maxLogoSizeFor(kitType, kitProduct = null) {
+  const box = textBoxFor(kitType, kitProduct);
+  const fraction = box.constrained ? SAFE_AREA_TEXT_FRACTION : MAX_TEXT_FRACTION;
+  return Math.floor(Math.min(box.w, box.h) * fraction);
+}
+
+/**
+ * logoScale (the 30-150 backend schema range) -> rendered pixel diameter. The one place this
+ * formula is written — KitPreview imports it rather than keeping its own copy, and so does
+ * maxLogoScaleFor below, so the forward and inverse directions can't quietly drift apart the way
+ * two hand-copied formulas would.
+ */
+export function logoScaleToPx(logoScale) {
+  return 18 + (logoScale / 100) * 42;
+}
+
+/**
+ * The largest logoScale that renders within maxLogoSizeFor on this shape — the inverse of
+ * logoScaleToPx, clamped to the schema's own 30-150 bounds. Exposed so a garment switch can shrink
+ * an already-too-big logoScale immediately, the same way it shrinks numberSize (see
+ * maxTextSizeFor's doc comment). When even the schema's floor (30) would still render larger than
+ * the new garment allows, this clamps to that floor rather than going lower — the render-time
+ * clamp in KitPreview (via maxLogoSizeFor) is the actual backstop regardless of what gets stored.
+ */
+export function maxLogoScaleFor(kitType, kitProduct = null) {
+  const maxPx = maxLogoSizeFor(kitType, kitProduct);
+  const rawScale = ((maxPx - 18) / 42) * 100;
+  return Math.max(30, Math.min(150, Math.floor(rawScale)));
 }

@@ -168,7 +168,7 @@ Request:
   "contact": { "firstName": "Jane", "lastName": "Doe", "email": "jane@example.com", "phone": "+92 300 1234567", "clubName": "" },
   "address": { "street": "...", "city": "...", "province": "", "postalCode": "", "country": "Pakistan" },
   "deliveryId": "express",
-  "paymentId": "card",
+  "paymentId": "bank",
   "instructions": ""
 }
 ```
@@ -176,7 +176,7 @@ Request:
 `design` is the full customizer state (see `src/customize/kitShapes.js` → `DEFAULT_DESIGN` for
 every field it can contain — colors, template, logo, text positions, etc). `deliveryId` is one of
 `standard`/`express`/`rush`/`international` (`DELIVERY_METHODS` in the same file). `paymentId` is
-one of `card`/`bank`/`cod`.
+one of `bank`/`cod`.
 
 Per line: `size` is the size ORDERED and is what reaches `order_items.size`; `design.size` is part
 of the design snapshot and is not cross-checked against it. `quantity` is at least 1 per line.
@@ -188,9 +188,10 @@ a valid order, a single line of 3 is not. Ceiling is 500 kits across all lines.
 `international`; Pakistan must not. Mismatch is a `422` with the allowed ids in
 `details.deliveryId`.
 
-**Card details are validated client-side but are never sent to `/orders`** — only `paymentId` is
-sent. If you need real card processing, that's a separate payment-gateway integration (Stripe/etc.),
-not part of this payload.
+**There is no card payment option.** `paymentId` is `bank` (manually reconciled — payment details
+are emailed, production starts once confirmed) or `cod`. Card was removed: nothing behind it ever
+charged anything, so offering it implied a payment collection that never happened. Real card
+processing would be a separate payment-gateway integration (Stripe/etc.), not part of this payload.
 
 **`pricing` may still be sent and is ignored.** The server recomputes every figure from
 `kit_prices` and `delivery_methods` and persists only its own. Send it or don't; a tampered total

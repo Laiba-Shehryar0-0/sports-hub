@@ -24,6 +24,12 @@ const position = z.object({
   y: z.number().min(0).max(1),
 }).strict();
 
+// textPosition/numberPosition are per side — moving the name on the back must not move it on the
+// front, so front and back are independent {x,y} pairs, same shape as playerName/playerNumber
+// below. logoPosition stays a plain `position`: the logo only ever renders on the front, so there
+// is no back position for it to have.
+const positionBySide = z.object({ front: position, back: position }).strict();
+
 const LAYER_IDS = ['number', 'name', 'logo', 'sleeves', 'body'];
 
 /**
@@ -72,8 +78,8 @@ const designSchema = z.object({
   nameSize: z.number().int().min(8).max(30),
   numberSize: z.number().int().min(20).max(80),
 
-  textPosition: position,
-  numberPosition: position,
+  textPosition: positionBySide,
+  numberPosition: positionBySide,
 
   /**
    * Either an inline data URL or a logo already uploaded via POST /api/assets.
@@ -148,7 +154,7 @@ const baseOrder = z.object({
     country: z.enum(SHIPPING_COUNTRIES),
   }).strict(),
   deliveryId: z.enum(['standard', 'express', 'rush', 'international']),
-  paymentId: z.enum(['card', 'bank', 'cod']),
+  paymentId: z.enum(['bank', 'cod']),
   instructions: optionalText(1000),
 
   // ACCEPTED, THEN DISCARDED. Never read, never stored, never returned (CLAUDE.md rule 2).
