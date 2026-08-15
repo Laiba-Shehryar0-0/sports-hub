@@ -166,7 +166,7 @@ Request:
     { "design": { "kitType": "shorts", "…": "…" }, "size": "L", "quantity": 5 }
   ],
   "contact": { "firstName": "Jane", "lastName": "Doe", "email": "jane@example.com", "phone": "+92 300 1234567", "clubName": "" },
-  "address": { "street": "...", "city": "...", "province": "", "postalCode": "", "country": "Pakistan" },
+  "address": { "street": "...", "city": "...", "province": "Punjab", "country": "Pakistan" },
   "deliveryId": "express",
   "paymentId": "bank",
   "instructions": ""
@@ -187,6 +187,14 @@ a valid order, a single line of 3 is not. Ceiling is 500 kits across all lines.
 **`address.country` and `deliveryId` must agree.** Anything outside Pakistan must use
 `international`; Pakistan must not. Mismatch is a `422` with the allowed ids in
 `details.deliveryId`.
+
+**`address.postalCode` does not exist in the contract** (removed 2026-08-15). **`address.province`
+must be one of the 6 real Pakistani provinces/territories** (`PAKISTAN_PROVINCES` in
+`orders.constants.js`: Punjab, Sindh, Khyber Pakhtunkhwa, Balochistan, Gilgit-Baltistan, Azad
+Jammu & Kashmir — Islamabad is deliberately excluded, it's a federal territory, not a province)
+**when `address.country` is `"Pakistan"`** — mismatch is a `422` with the allowed list in
+`details.address.province`. For any other country, `province` is free text and may be blank; there
+is no equivalent list for the other 28 `SHIPPING_COUNTRIES` (India removed 2026-08-15).
 
 **There is no card payment option.** `paymentId` is `bank` (manually reconciled — payment details
 are emailed, production starts once confirmed) or `cod`. Card was removed: nothing behind it ever
@@ -249,6 +257,57 @@ logo has been swept away. Both are reported together in one response.
 
 Rate limit: 120/hour per user (the cart re-quotes on every debounced edit). `POST /orders` is
 10/hour per IP.
+
+### `GET /orders` — order history (mine)
+**Requires auth.** Returns the signed-in user's own orders, newest first. `401` if not signed in.
+Guest orders (`user_id IS NULL`) never appear here for anyone — there is no way to claim one after
+the fact.
+
+Query params, both optional: `page` (default `1`, min `1`), `limit` (default `20`, max `50`).
+
+Response `200`:
+```json
+{
+  "orders": [
+    { "id": 44, "reference": "KW-2026-000044", "status": "placed",
+      "totalKits": 11, "total": 24800, "createdAt": "2026-08-15T10:22:00.000Z" }
+  ],
+  "page": 1,
+  "limit": 20,
+  "total": 3
+}
+```
+Metadata only — no `design_json`, no per-line breakdown, same "list endpoints stay light" rule as
+every other list in this API. Fetch `GET /orders/:reference` for one order's full contents.
+
+### `GET /orders/:reference` — order detail
+**Requires auth.** `:reference` is the `KW-YYYY-NNNNNN` string, not the numeric `id`. `401` if not
+signed in; **`404`, never `403`**, both when the reference doesn't exist and when it belongs to
+someone else — ownership is checked in the query itself (`WHERE reference = ? AND user_id = ?`),
+so neither case is distinguishable from the other.
+
+Response `200`: identical shape to `POST /orders`'s `201` above, plus `createdAt`:
+```json
+{
+  "id": 44,
+  "reference": "KW-2026-000044",
+  "status": "placed",
+  "createdAt": "2026-08-15T10:22:00.000Z",
+  "pricing": {
+    "items": [
+      { "position": 1, "kitType": "jersey", "kitProduct": "Football Jersey",
+        "templateName": "Solid", "sportLabel": "Football",
+        "size": "M", "quantity": 6, "unitPrice": 2800, "lineTotal": 16800 }
+    ],
+    "totalKits": 11, "kitPrice": 24300, "deliveryPrice": 500, "discount": 0, "total": 24800
+  }
+}
+```
+Every figure is the persisted snapshot from the moment the order was placed, never a recompute —
+if `kit_prices` has changed since, this still states what was actually charged. `pricing.items`
+carries no `kitLabel`/`deliveryName` presentation strings for the same reason: those are derived
+from tables that can drift, so the response states `kitProduct` (a snapshot, not a lookup) and
+leaves rendering a friendlier label to the caller.
 
 ---
 

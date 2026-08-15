@@ -17,13 +17,35 @@ export const SHIPPING_COUNTRIES = Object.freeze([
   'Spain', 'Italy', 'Sweden', 'Norway', 'Denmark',
   'United States', 'Canada',
   'Australia', 'New Zealand',
-  'India', 'Bangladesh', 'Sri Lanka', 'Malaysia', 'Singapore', 'China',
+  'Bangladesh', 'Sri Lanka', 'Malaysia', 'Singapore', 'China',
   'Turkey', 'South Africa',
 ]);
 
 /** standard/express/rush are all domestic couriers — see DELIVERY_METHODS descriptions. */
 export const DOMESTIC_DELIVERY_IDS = Object.freeze(['standard', 'express', 'rush']);
 export const INTERNATIONAL_DELIVERY_ID = 'international';
+
+/**
+ * The provinces and territories a domestic (Pakistan) address can be validated against.
+ *
+ * Islamabad is deliberately NOT in this list — it is a federal capital territory, not a province,
+ * and a checkout address naming it as one is wrong the way naming "Washington D.C." a US state
+ * would be. There is no separate "territory" field in the contract for it to go instead; a client
+ * shipping there selects the province it's physically administered from (Punjab).
+ *
+ * Only meaningful for DOMESTIC_COUNTRY — the business has no equivalent list for the other 28
+ * SHIPPING_COUNTRIES (US states, Canadian provinces, etc.), so an international address keeps
+ * `province` as free text rather than an invented enum. See orders.schema.js's
+ * `provinceValidForCountry` for where this splits.
+ */
+export const PAKISTAN_PROVINCES = Object.freeze([
+  'Punjab',
+  'Sindh',
+  'Khyber Pakhtunkhwa',
+  'Balochistan',
+  'Gilgit-Baltistan',
+  'Azad Jammu & Kashmir',
+]);
 
 /**
  * The rule the checkout form and the API both enforce.

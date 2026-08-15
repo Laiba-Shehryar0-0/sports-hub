@@ -71,7 +71,10 @@ Never `res.status(500)` inside a controller.
    rejected. Never spread `req.body` into SQL — list columns explicitly.
 8. **Optional contract fields arrive as EMPTY STRINGS, not undefined.** `z.string().email()`
    fails on `''`. Use an explicit `z.union([z.literal(''), ...])` for optional email/phone/
-   province/postalCode/clubName/customSize/instructions.
+   clubName/customSize/instructions. `address.province` is the exception: unconditionally optional
+   free text for an international address, but required as one of `PAKISTAN_PROVINCES` when
+   `address.country` is `"Pakistan"` — enforced by a cross-field `superRefine`, not the field's own
+   type. `address.postalCode` does not exist in the contract (removed 2026-08-15).
 9. **Every array, string and number is bounded**: `totalKits` 5–500 (5 is the minimum order the
    checkout UI states and enforces; the server enforces it too so the floor is real, not a
    client-side nicety — changed from 1 on 2026-08-05), `playerName` ≤20,

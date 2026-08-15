@@ -1,7 +1,8 @@
 import { z } from 'zod';
 import { MAX_TOTAL_KITS, MAX_CART_ITEMS } from '../pricing/pricing.constants.js';
 import {
-  SHIPPING_COUNTRIES, DOMESTIC_COUNTRY, allowedDeliveryIds, isDeliveryAllowedForCountry,
+  SHIPPING_COUNTRIES, DOMESTIC_COUNTRY, PAKISTAN_PROVINCES,
+  allowedDeliveryIds, isDeliveryAllowedForCountry,
 } from './orders.constants.js';
 import {
   MAX_DATA_URL_CHARS, DATA_URL_PREFIX_RE, STORED_LOGO_URL_RE,
@@ -146,8 +147,11 @@ const baseOrder = z.object({
   address: z.object({
     street: z.string().trim().min(1).max(255),
     city: z.string().trim().min(1).max(100),
-    province: optionalText(100),
-    postalCode: optionalText(20),
+    // Base type only allows blank-or-short-string; whether blank is actually acceptable depends
+    // on `country` and is enforced by provinceValidForCountry below, not here — a Pakistan
+    // address must name one of PAKISTAN_PROVINCES, an international one has no such list to check
+    // against and stays free text.
+    province: z.string().trim().max(100).optional().default(''),
     // A fixed list, not free text. This also RESOLVES docs/EXTRACTED.md discrepancy #2: country
     // could previously be submitted as '' because the old TextField had no required-validation.
     // A dropdown always has a value, so '' is no longer producible and no longer accepted.
@@ -186,6 +190,22 @@ function deliveryMatchesCountry(order, ctx) {
 }
 
 /**
+ * Cross-field rule: a Pakistan address must name a real province; anywhere else, "province" has
+ * no enumerable list to check against (no US-states/Canadian-provinces table exists here), so it
+ * stays free text and may be blank.
+ */
+function provinceValidForCountry(order, ctx) {
+  if (order.address.country === DOMESTIC_COUNTRY && !PAKISTAN_PROVINCES.includes(order.address.province)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['address', 'province'],
+      message: 'Select a valid province.',
+      params: { allowed: PAKISTAN_PROVINCES },
+    });
+  }
+}
+
+/**
  * The multi-item shape the cart sends — the ONLY shape accepted, since Phase 5.
  *
  * ┌─ THE LEGACY SINGLE-DESIGN BRANCH WAS REMOVED ON 2026-08-13 ───────────────────────────────────┐
@@ -204,7 +224,7 @@ export const createOrderSchema = baseOrder.extend({
   items: z.array(cartItemSchema)
     .min(1, 'Your cart is empty.')
     .max(MAX_CART_ITEMS, `A cart can hold at most ${MAX_CART_ITEMS} designs.`),
-}).strict().superRefine(deliveryMatchesCountry);
+}).strict().superRefine(deliveryMatchesCountry).superRefine(provinceValidForCountry);
 
 /**
  * POST /orders/quote — price a cart in progress. Creates nothing.
@@ -228,3 +248,22 @@ export const quoteSchema = z.object({
 // creating a second. Optional: the frontend did not send one historically, and an order without
 // a key is still a valid order — just unprotected.
 export const idempotencyKeySchema = z.string().uuid().optional();
+
+// GET /orders and GET /orders/:reference take no query string. .strict() so an unexpected key
+// (a stray ?status= someone assumes exists, say) 422s instead of being silently ignored.
+export const emptyQuerySchema = z.object({}).strict();
+
+// Matches exactly what buildReference produces: 'KW-<4-digit year>-<6-digit zero-padded id>'.
+// Malformed input 422s here rather than reaching a WHERE clause that can only ever match zero
+// rows — a cleaner failure than a 404 that gives no hint the reference was never a valid shape.
+export const referenceParamSchema = z.object({
+  reference: z.string().regex(/^KW-\d{4}-\d{6}$/, 'Not a valid order reference.'),
+}).strict();
+
+// GET /orders (mine) pagination. Bounded per CLAUDE.md rule 1 — findOrdersByUser inlines these
+// into the SQL string rather than binding them, so this schema IS the safety boundary, not a
+// nicety on top of one.
+export const listOrdersQuerySchema = z.object({
+  page: z.coerce.number().int().min(1).max(10_000).default(1),
+  limit: z.coerce.number().int().min(1).max(50).default(20),
+}).strict();

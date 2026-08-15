@@ -1,14 +1,24 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import {
+  describe, it, expect, beforeAll, afterAll, vi,
+} from 'vitest';
 import request from 'supertest';
 import { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import sharp from 'sharp';
+
+// Real, not stubbed for content (see orders.mailer.test.js for that) — only spied on here, to
+// prove a structural guarantee that would otherwise need reading the source to trust: a NEW order
+// triggers exactly one confirmation attempt, and an idempotent REPLAY of the same request
+// triggers zero, never a second email for the one order.
+vi.mock('./orders.mailer.js', () => ({ sendOrderConfirmationEmail: vi.fn() }));
+
 import { createApp } from '../../app.js';
 import { pool, closePool } from '../../db/pool.js';
 import { env } from '../../config/env.js';
-import { SHIPPING_COUNTRIES } from './orders.constants.js';
+import { SHIPPING_COUNTRIES, PAKISTAN_PROVINCES } from './orders.constants.js';
 import { storeFromDataUrl } from '../assets/assets.service.js';
+import { sendOrderConfirmationEmail } from './orders.mailer.js';
 
 const app = createApp();
 
@@ -51,7 +61,7 @@ function validOrder({ design, contact, address, root, size = 'M', quantity = 11 
       ...contact,
     },
     address: {
-      street: '12 Mall Road', city: 'Lahore', province: '', postalCode: '', country: 'Pakistan',
+      street: '12 Mall Road', city: 'Lahore', province: 'Punjab', country: 'Pakistan',
       ...address,
     },
     deliveryId: 'express', paymentId: 'cod', instructions: '',
@@ -287,7 +297,7 @@ describe('POST /api/orders — the legacy single-design body is rejected', () =>
       phone: '+92 300 1234567', clubName: '',
     },
     address: {
-      street: '12 Mall Road', city: 'Lahore', province: '', postalCode: '', country: 'Pakistan',
+      street: '12 Mall Road', city: 'Lahore', province: 'Punjab', country: 'Pakistan',
     },
     deliveryId: 'express', paymentId: 'cod', totalKits: 11, primarySize: 'M', instructions: '',
   });
@@ -640,6 +650,46 @@ describe('POST /api/orders — idempotency', () => {
 });
 
 /**
+ * The order-confirmation email must fire exactly once per NEW order, never again on a replay —
+ * sendOrderConfirmationEmail is mocked at the top of this file so that guarantee is provable
+ * structurally, not just inferred from placeOrder's source. Call-count DELTAS, not absolutes: the
+ * mock is shared across every test in this file, and almost every one of them places an order.
+ */
+describe('POST /api/orders — confirmation email', () => {
+  it('is attempted once for a newly created order, with the right recipient and paymentId', async () => {
+    const before = sendOrderConfirmationEmail.mock.calls.length;
+    const res = await request(app).post('/api/orders').send(validOrder({
+      contact: { email: 'confirm-me@example.com' },
+      root: { paymentId: 'bank' },
+    }));
+
+    expect(res.status).toBe(201);
+    expect(sendOrderConfirmationEmail.mock.calls.length).toBe(before + 1);
+
+    const [args] = sendOrderConfirmationEmail.mock.calls.at(-1);
+    expect(args.to).toBe('confirm-me@example.com');
+    expect(args.paymentId).toBe('bank');
+    expect(args.order.reference).toBe(res.body.reference);
+  });
+
+  it('is NOT attempted again on an idempotent replay of the same request', async () => {
+    const key = randomUUID();
+    const payload = validOrder();
+
+    const first = await request(app).post('/api/orders').set('Idempotency-Key', key).send(payload);
+    expect(first.status).toBe(201);
+    const afterFirst = sendOrderConfirmationEmail.mock.calls.length;
+
+    const second = await request(app).post('/api/orders').set('Idempotency-Key', key).send(payload);
+    expect(second.status).toBe(201);
+    expect(second.body.id).toBe(first.body.id); // confirmed a replay, not a new order
+
+    // Same call count as right after the FIRST request — the replay added zero.
+    expect(sendOrderConfirmationEmail.mock.calls.length).toBe(afterFirst);
+  });
+});
+
+/**
  * These test the client's KEY-GENERATION POLICY, not the server's handling of a key.
  *
  * The earlier tests pass the same key twice by hand, which passes even against a broken client —
@@ -771,11 +821,70 @@ describe('POST /api/orders — optional contract fields arrive as empty strings'
   // country is deliberately NOT in this list any more. It used to accept '' because the old
   // free-text field had no required-validation; it is now a dropdown backed by a z.enum, so ''
   // is neither producible nor accepted (docs/EXTRACTED.md discrepancy #2, resolved).
-  it('accepts empty clubName, province, postalCode and instructions', async () => {
+  //
+  // province is ALSO not in this list any more — it used to be unconditionally optional, but a
+  // Pakistan address must now name a real province (see the block below). It stays optional only
+  // for an international address, which is covered separately there.
+  it('accepts empty clubName and instructions', async () => {
     const res = await request(app).post('/api/orders').send(validOrder({
       contact: { clubName: '' },
-      address: { province: '', postalCode: '' },
       root: { instructions: '' },
+    }));
+    expect(res.status).toBe(201);
+  });
+});
+
+/**
+ * postalCode was removed from the contract entirely (not merely made optional) — the field no
+ * longer exists on either side. province, in exchange, went from unconditionally-optional free
+ * text to a fixed list of the 6 real provinces/territories (Islamabad excluded — it's a federal
+ * territory, not a province), but ONLY for a Pakistan address: there is no equivalent list for
+ * the other 28 SHIPPING_COUNTRIES, so an international address keeps province as free text and
+ * may leave it blank.
+ */
+describe('POST /api/orders — province validation and postalCode removal', () => {
+  it('rejects postalCode as an unrecognized key', async () => {
+    const res = await request(app).post('/api/orders').send(validOrder({
+      address: { postalCode: '54000' },
+    }));
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+    expect(JSON.stringify(res.body.details)).toMatch(/postalCode/);
+  });
+
+  it('rejects an empty province for a Pakistan address', async () => {
+    const res = await request(app).post('/api/orders').send(validOrder({
+      address: { province: '' },
+    }));
+    expect(res.status).toBe(422);
+    expect(res.body.details.address?.province?.[0] ?? JSON.stringify(res.body.details))
+      .toMatch(/valid province/i);
+  });
+
+  it('rejects a garbage province for a Pakistan address', async () => {
+    const res = await request(app).post('/api/orders').send(validOrder({
+      address: { province: 'Narnia' },
+    }));
+    expect(res.status).toBe(422);
+  });
+
+  it.each(PAKISTAN_PROVINCES)('accepts %s as a Pakistan province', async (province) => {
+    const res = await request(app).post('/api/orders').send(validOrder({ address: { province } }));
+    expect(res.status).toBe(201);
+  });
+
+  it('accepts an empty province for an international address', async () => {
+    const res = await request(app).post('/api/orders').send(validOrder({
+      address: { country: 'United Kingdom', province: '' },
+      root: { deliveryId: 'international' },
+    }));
+    expect(res.status).toBe(201);
+  });
+
+  it('accepts free-text province for an international address', async () => {
+    const res = await request(app).post('/api/orders').send(validOrder({
+      address: { country: 'United Kingdom', province: 'Greater London' },
+      root: { deliveryId: 'international' },
     }));
     expect(res.status).toBe(201);
   });
@@ -898,5 +1007,152 @@ describe('POST /api/orders — validation', () => {
     expect(res.body.message).toBeTruthy();
     expect(res.body.code).toBe('VALIDATION_ERROR');
     expect(res.body.details).toBeTruthy();
+  });
+});
+
+/**
+ * Registers, marks verified, and logs in — the same three-step dance POST /orders/quote's suite
+ * already uses. Returns the bearer token, ready to `.set('Authorization', ...)`.
+ */
+async function registerAndLogin(label) {
+  const email = `${label}-${Date.now()}-${Math.random().toString(36).slice(2)}@example.com`;
+  const password = 'Str0ng-Passw0rd!';
+  await request(app).post('/api/auth/register').send({ name: label, email, password });
+  await pool.execute(
+    'UPDATE users SET email_verified_at = NOW() WHERE email = ?',
+    [email],
+  );
+  const res = await request(app).post('/api/auth/login').send({ email, password });
+  return res.body.token;
+}
+
+describe('GET /api/orders and GET /api/orders/:reference — order history', () => {
+  let tokenA;
+  let tokenB;
+  let refA1;
+  let refA2;
+  let refB1;
+  let refGuest;
+
+  beforeAll(async () => {
+    tokenA = await registerAndLogin('history-a');
+    tokenB = await registerAndLogin('history-b');
+
+    const placeAs = async (token) => {
+      const res = await request(app).post('/api/orders')
+        .set('Authorization', `Bearer ${token}`)
+        .send(validOrder());
+      return res.body.reference;
+    };
+
+    // Two for A, spaced so created_at orders them deterministically newest-first.
+    refA1 = await placeAs(tokenA);
+    await new Promise((r) => setTimeout(r, 1100));
+    refA2 = await placeAs(tokenA);
+
+    refB1 = await placeAs(tokenB);
+
+    // No Authorization header — optionalAuth degrades this to a guest order (user_id NULL).
+    const guestRes = await request(app).post('/api/orders').send(validOrder());
+    refGuest = guestRes.body.reference;
+  });
+
+  describe('GET /api/orders', () => {
+    it('requires authentication', async () => {
+      const res = await request(app).get('/api/orders');
+      expect(res.status).toBe(401);
+    });
+
+    it("returns only the caller's own orders, newest first, and never the guest order", async () => {
+      const res = await request(app).get('/api/orders')
+        .set('Authorization', `Bearer ${tokenA}`);
+
+      expect(res.status).toBe(200);
+      const refs = res.body.orders.map((o) => o.reference);
+      expect(refs).toEqual([refA2, refA1]); // newest first
+      expect(refs).not.toContain(refB1);
+      expect(refs).not.toContain(refGuest);
+    });
+
+    it('reports metadata only — id, reference, status, totalKits, total, createdAt', async () => {
+      const res = await request(app).get('/api/orders')
+        .set('Authorization', `Bearer ${tokenA}`);
+      const [order] = res.body.orders;
+      expect(Object.keys(order).sort()).toEqual(
+        ['createdAt', 'id', 'reference', 'status', 'total', 'totalKits'].sort(),
+      );
+    });
+
+    it('paginates: limit=1 returns one row per page and the correct total', async () => {
+      const page1 = await request(app).get('/api/orders?limit=1&page=1')
+        .set('Authorization', `Bearer ${tokenA}`);
+      const page2 = await request(app).get('/api/orders?limit=1&page=2')
+        .set('Authorization', `Bearer ${tokenA}`);
+
+      expect(page1.body.orders).toHaveLength(1);
+      expect(page1.body.orders[0].reference).toBe(refA2);
+      expect(page1.body.total).toBe(2);
+
+      expect(page2.body.orders).toHaveLength(1);
+      expect(page2.body.orders[0].reference).toBe(refA1);
+    });
+
+    it('rejects an out-of-bounds limit rather than silently clamping it', async () => {
+      const res = await request(app).get('/api/orders?limit=999')
+        .set('Authorization', `Bearer ${tokenA}`);
+      expect(res.status).toBe(422);
+    });
+
+    it('rejects an unrecognized query key (.strict)', async () => {
+      const res = await request(app).get('/api/orders?status=placed')
+        .set('Authorization', `Bearer ${tokenA}`);
+      expect(res.status).toBe(422);
+    });
+  });
+
+  describe('GET /api/orders/:reference', () => {
+    it('requires authentication', async () => {
+      const res = await request(app).get(`/api/orders/${refA1}`);
+      expect(res.status).toBe(401);
+    });
+
+    it("returns the caller's own order with full pricing detail", async () => {
+      const res = await request(app).get(`/api/orders/${refA1}`)
+        .set('Authorization', `Bearer ${tokenA}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.reference).toBe(refA1);
+      expect(res.body.status).toBe('placed');
+      expect(res.body.createdAt).toBeTruthy();
+      expect(res.body.pricing.items).toHaveLength(1);
+      expect(res.body.pricing.items[0]).toMatchObject({ kitType: 'jersey', quantity: 11 });
+      expect(res.body.pricing.total).toBeGreaterThan(0);
+    });
+
+    it("404s on another user's order — never 403, so existence isn't distinguishable", async () => {
+      const res = await request(app).get(`/api/orders/${refB1}`)
+        .set('Authorization', `Bearer ${tokenA}`);
+      expect(res.status).toBe(404);
+      expect(res.body.code).toBe('ORDER_NOT_FOUND');
+    });
+
+    it('404s on a well-formed but nonexistent reference', async () => {
+      const res = await request(app).get('/api/orders/KW-2026-999999')
+        .set('Authorization', `Bearer ${tokenA}`);
+      expect(res.status).toBe(404);
+    });
+
+    it('404s on the guest order — it belongs to no user_id, which can never match a caller', async () => {
+      const res = await request(app).get(`/api/orders/${refGuest}`)
+        .set('Authorization', `Bearer ${tokenA}`);
+      expect(res.status).toBe(404);
+    });
+
+    it('422s on a malformed reference instead of reaching the database', async () => {
+      const res = await request(app).get('/api/orders/not-a-reference')
+        .set('Authorization', `Bearer ${tokenA}`);
+      expect(res.status).toBe(422);
+      expect(res.body.code).toBe('VALIDATION_ERROR');
+    });
   });
 });

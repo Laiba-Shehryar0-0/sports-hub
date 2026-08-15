@@ -28,6 +28,14 @@ const staticOptions = {
 export function createApp() {
   const app = express();
 
+  // Unset by default — trust nobody, correct for a direct connection. Set TRUST_PROXY when
+  // deployed behind a reverse proxy; env.js rejects "true"/"*" (see comment there).
+  if (env.TRUST_PROXY !== undefined) {
+    const hops = Number(env.TRUST_PROXY);
+    const isHopCount = /^\d+$/.test(env.TRUST_PROXY);
+    app.set('trust proxy', isHopCount ? hops : env.TRUST_PROXY.split(',').map((s) => s.trim()));
+  }
+
   app.use(helmet());
   app.use(cors({ origin: env.CORS_ORIGIN }));
   app.use(pinoHttp({

@@ -1,4 +1,4 @@
-// Snapshot of ../kit-frontend as of 2026-08-14 — reference only, do not edit here.
+// Snapshot of ../kit-frontend as of 2026-08-15 — reference only, do not edit here.
 // Source: src/pages/Customize.jsx
 
 import { useState, useRef, useCallback, useEffect } from 'react';
@@ -9,11 +9,12 @@ import useHistoryState from '../hooks/useHistoryState';
 import {
   KIT_TYPES, SPORTS, SIZES, SIZE_UNITS, COLOR_PALETTE, APPLY_TARGETS,
   FONTS, DESIGN_TEMPLATES, BADGE_PRESETS, POSITIONS, DEFAULT_DESIGN,
-  DESIGN_STORAGE_KEY, SAVED_DESIGNS_KEY, loadStoredDesign,
-  loadEditedKitImage, clearEditedKitImage, resolveShapeKey, maxTextSizeFor, maxLogoScaleFor,
+  DESIGN_STORAGE_KEY, loadStoredDesign,
+  loadEditedKitImage, clearEditedKitImage, resolveShapeKey, maxNumberSizeFor, maxLogoScaleFor,
+  NUMBER_SIZE_MIN,
 } from '../customize/kitShapes';
 import {
-  STORAGE_MESSAGE, writeStorage, readSavedDesigns, capSavedDesigns,
+  STORAGE_MESSAGE, writeStorage, readSavedDesigns, capSavedDesigns, savedDesignsKey,
 } from '../customize/designStorage';
 import {
   uploadLogoSequenced, createUploadSequencer, readFileAsDataUrl, ACCEPTED_LOGO_TYPES,
@@ -208,7 +209,7 @@ export default function Customize() {
       ...stored,
       kitType: match.item.kitType, kitProduct: match.item.label, sport: match.group.id,
       ...base,
-      numberSize: Math.min(base.numberSize, maxTextSizeFor(match.item.kitType, match.item.label)),
+      numberSize: Math.min(base.numberSize, maxNumberSizeFor(match.item.kitType, match.item.label)),
       logoScale: Math.min(base.logoScale, maxLogoScaleFor(match.item.kitType, match.item.label)),
     };
   });
@@ -274,6 +275,15 @@ export default function Customize() {
   const navigate = useNavigate();
   const { user, openSignIn } = useAuth();
   const { add: addToCart, maxItems: cartMax } = useCart();
+
+  /**
+   * Same rule as designRef, same reason: handleSave runs through gated() and can replay after
+   * sign-in, from a closure captured in the click's render — where `user` was still null. Reading
+   * `user` directly there would save under a stale (missing) id; userRef.current is reassigned on
+   * every render, so a replayed save reads whoever actually ended up signed in.
+   */
+  const userRef = useRef(user);
+  userRef.current = user;
 
   const selectTool = useCallback((tool, tab) => {
     setActiveTool(tool);
@@ -381,7 +391,7 @@ export default function Customize() {
    * straight over. This snapshots the OUTGOING garment's six fields into garmentMemoryRef before
    * switching, then either restores what the INCOMING garment had the last time it was active in
    * this session, or — first time selected — starts it from DEFAULT_DESIGN, still shrunk (never
-   * grown) to fit via maxTextSizeFor/maxLogoScaleFor in case even the defaults overflow this shape.
+   * grown) to fit via maxNumberSizeFor/maxLogoScaleFor in case even the defaults overflow this shape.
    */
   const switchGarment = useCallback((kitType, kitProduct, sport) => {
     const prevKey = garmentKeyFor(design.kitType, design.kitProduct);
@@ -393,7 +403,7 @@ export default function Customize() {
     patch({
       kitType, kitProduct, sport,
       ...base,
-      numberSize: Math.min(base.numberSize, maxTextSizeFor(kitType, kitProduct)),
+      numberSize: Math.min(base.numberSize, maxNumberSizeFor(kitType, kitProduct)),
       logoScale: Math.min(base.logoScale, maxLogoScaleFor(kitType, kitProduct)),
     });
   }, [design, patch]);
@@ -422,25 +432,28 @@ export default function Customize() {
   }, [setDesign, invalidateEditedKit]);
 
   const handleSave = useCallback(() => {
-    // Via the ref, not `design` — this runs through gated(), so it can be replayed after sign-in
-    // with a closure captured before the modal opened. See the boxed comment above.
+    // Via the refs, not `design`/`user` — this runs through gated(), so it can be replayed after
+    // sign-in with a closure captured before the modal opened. See the boxed comment above.
     const current = designRef.current;
+    const userId = userRef.current?.id;
+    // gated() guarantees sign-in before this runs; this is defensive, not the actual guard.
+    if (userId == null) return;
 
-    const saved = readSavedDesigns();
+    const saved = readSavedDesigns(userId);
     saved.push({ ...current, id: Date.now(), kitTypeLabel: current.kitProduct || KIT_TYPES.find(k => k.id === current.kitType)?.label });
 
-    const failure = writeStorage(SAVED_DESIGNS_KEY, JSON.stringify(capSavedDesigns(saved)));
+    const failure = writeStorage(savedDesignsKey(userId), JSON.stringify(capSavedDesigns(saved)));
 
     // INSIDE the outcome check, not unconditionally after it. This previously said "Design saved"
     // even when the write had thrown — not a silent failure but an active false confirmation,
     // which is worse: the user has been told their work is safe when it is gone.
     //
-    // The wording deliberately does not promise the design can be reopened. It cannot: nothing
-    // reads these entries back (see the known-gaps entry).
+    // "My Designs" now reads the newest entry back (kitShapes.js's loadMostRecentSavedDesign), so
+    // the message can finally say so — it could not before, when nothing ever read these back.
     if (failure) showError(STORAGE_MESSAGE[failure]);
-    else showInfo('Design saved to this browser');
-    // No `design` dependency: the value is read from designRef at call time, so re-creating this
-    // callback per design change would achieve nothing except a new closure to go stale.
+    else showInfo('Design saved — open it anytime from My Designs');
+    // No `design`/`user` dependency: both are read from refs at call time, so re-creating this
+    // callback per change would achieve nothing except a new closure to go stale.
   }, [showError, showInfo]);
 
   const handleExport = useCallback(() => {
@@ -1061,7 +1074,7 @@ function TextPanel({ design, patch, side, setSide }) {
       <div className={sectionCls({ afterNoBorder: true })}>
         <h3 className={labelCls}>Text Size</h3>
         <SliderRow label="Name" value={design.nameSize} min={8} max={30} onChange={v => patch({ nameSize: v })} />
-        <SliderRow label="Number" value={design.numberSize} min={20} max={80} onChange={v => patch({ numberSize: v })} />
+        <SliderRow label="Number" value={design.numberSize} min={NUMBER_SIZE_MIN} max={80} onChange={v => patch({ numberSize: v })} />
       </div>
 
       <div className={sectionCls({ last: true })}>

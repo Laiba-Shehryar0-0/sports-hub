@@ -51,6 +51,28 @@ const envSchema = z.object({
 
   CORS_ORIGIN: z.string().min(1).default('http://localhost:5173'),
 
+  // Express's trust-proxy setting. Unset (the default) means "trust nobody" — correct for a
+  // direct connection, and what this app has always run as. Behind a reverse proxy (nginx,
+  // Cloudflare, a load balancer), leaving this unset makes every client collapse into one
+  // rate-limit key and records the proxy's IP in sessions.ip instead of the caller's.
+  //
+  // Accepts a hop count ("1" — trust exactly one proxy, e.g. one nginx in front of the app) or a
+  // comma-separated list of trusted IPs/CIDRs/Express keywords (e.g. "loopback,10.0.0.0/8").
+  // Deliberately does NOT accept "true"/"false"/"*" — Express's own docs call `true` out as
+  // unsafe: it trusts the leftmost X-Forwarded-For hop, which is client-supplied and trivially
+  // spoofed by anyone who can reach the app directly.
+  TRUST_PROXY: optionalEnvString.refine(
+    (value) => {
+      if (value === undefined) return true;
+      if (/^(true|false|\*)$/i.test(value)) return false;
+      return value.split(',').every((entry) => /^[a-zA-Z0-9.:/_-]+$/.test(entry.trim()));
+    },
+    {
+      message: 'TRUST_PROXY must be a hop count (e.g. "1") or a comma-separated list of '
+        + 'trusted IPs/CIDRs/keywords — never "true", "false", or "*".',
+    },
+  ),
+
   // Filesystem roots. Both optional because their defaults depend on repoRoot and NODE_ENV, so
   // they are resolved after parsing rather than with .default() here.
   //
@@ -76,6 +98,16 @@ const envSchema = z.object({
   SMTP_FROM: optionalEnvString.pipe(
     z.string().default('Kit World Sports <no-reply@kitworldsports.local>'),
   ),
+
+  // Shown in the order-confirmation email for a `paymentId: 'bank'` order, so the customer knows
+  // where to send money. Optional here (not .default()'d) so the superRefine below can tell
+  // "genuinely unset" apart from "set" — the friendly dev/test placeholder is filled in after
+  // parsing, same pattern as STATIC_ROOT/LOGO_DIR above. BANK_BRANCH stays genuinely optional even
+  // in production: not every bank/account needs one.
+  BANK_NAME: optionalEnvString,
+  BANK_ACCOUNT_TITLE: optionalEnvString,
+  BANK_ACCOUNT_NUMBER: optionalEnvString,
+  BANK_BRANCH: optionalEnvString,
 }).superRefine((value, ctx) => {
   // A production deploy with no SMTP would accept signups and silently never deliver a code,
   // leaving every new user permanently stuck. Fail at boot instead.
@@ -84,6 +116,18 @@ const envSchema = z.object({
       code: z.ZodIssueCode.custom,
       path: ['SMTP_HOST'],
       message: 'SMTP_HOST is required when NODE_ENV=production (verification emails cannot be sent without it).',
+    });
+  }
+
+  // A production deploy with placeholder bank details would email every bank-transfer customer an
+  // account nobody can pay into. Fail at boot instead of discovering it from a confused customer.
+  if (value.NODE_ENV === 'production'
+      && (!value.BANK_NAME || !value.BANK_ACCOUNT_TITLE || !value.BANK_ACCOUNT_NUMBER)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['BANK_NAME'],
+      message: 'BANK_NAME, BANK_ACCOUNT_TITLE and BANK_ACCOUNT_NUMBER are required when '
+        + 'NODE_ENV=production — a bank-transfer order cannot be paid without real account details.',
     });
   }
 });
@@ -118,6 +162,12 @@ const LOGO_DIR = rawEnv.LOGO_DIR ?? (
     : path.join(STATIC_ROOT, 'logos')
 );
 
+// Obvious, unmissable placeholders — never a plausible-looking fake account. Only reachable
+// outside production; the superRefine above refuses to boot production without the real values.
+const BANK_NAME = rawEnv.BANK_NAME ?? '[SET BANK_NAME IN .env]';
+const BANK_ACCOUNT_TITLE = rawEnv.BANK_ACCOUNT_TITLE ?? '[SET BANK_ACCOUNT_TITLE IN .env]';
+const BANK_ACCOUNT_NUMBER = rawEnv.BANK_ACCOUNT_NUMBER ?? '[SET BANK_ACCOUNT_NUMBER IN .env]';
+
 export const env = {
   ...rawEnv,
   isProduction: rawEnv.NODE_ENV === 'production',
@@ -125,4 +175,7 @@ export const env = {
   DB_NAME: rawEnv.NODE_ENV === 'test' ? rawEnv.DB_NAME_TEST : rawEnv.DB_NAME,
   STATIC_ROOT,
   LOGO_DIR,
+  BANK_NAME,
+  BANK_ACCOUNT_TITLE,
+  BANK_ACCOUNT_NUMBER,
 };

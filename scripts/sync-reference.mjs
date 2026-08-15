@@ -77,6 +77,27 @@ export function isDeliveryAllowedForCountry(country, deliveryId) {
 `;
     },
   },
+  {
+    label: 'provinces.js',
+    dest: path.join(frontendRoot, 'src', 'data', 'provinces.js'),
+    build: async () => {
+      const c = await import('../src/modules/orders/orders.constants.js');
+      const list = c.PAKISTAN_PROVINCES.map(x => `  '${x}',`).join('\n');
+      return `// GENERATED FILE — DO NOT EDIT.
+// Source of truth: kit-backend/src/modules/orders/orders.constants.js
+// Regenerate with:  npm run sync:reference   (from kit-backend)
+//
+// The API requires address.province to be one of this exact list when address.country is
+// DOMESTIC_COUNTRY, so a hand-edit here would 422 every domestic order using the added province.
+// \`npm run sync:reference -- --check\` fails if this file is stale. There is no equivalent list
+// for the other SHIPPING_COUNTRIES — province stays free text for an international address.
+
+export const PAKISTAN_PROVINCES = [
+${list}
+];
+`;
+    },
+  },
 ];
 
 const checkOnly = process.argv.includes('--check');

@@ -1,4 +1,4 @@
-// Snapshot of ../kit-frontend as of 2026-08-14 — reference only, do not edit here.
+// Snapshot of ../kit-frontend as of 2026-08-15 — reference only, do not edit here.
 // Source: src/customize/kitShapes.js
 
 /**
@@ -9,6 +9,7 @@
 import footballBadge   from '../assets/football-badge.png';
 import cricketBadge    from '../assets/cricket_badge.png';
 import basketballBadge from '../assets/basketball_badge.png';
+import { readSavedDesigns, writeStorage } from './designStorage.js';
 
 export const KIT_TYPES = [
   { id: 'jersey', label: 'Jersey' },
@@ -184,7 +185,6 @@ export const DEFAULT_DESIGN = {
 };
 
 export const DESIGN_STORAGE_KEY = 'kitlab_current_design';
-export const SAVED_DESIGNS_KEY = 'kitlab_saved_designs';
 export const DRAWN_LOGO_KEY = 'kitlab_drawn_logo';
 // Flattened, drawn-on kit PNG per side, tagged with the garment it was drawn on — stored as
 // { front: { url, kitType }, back: { url, kitType } }.
@@ -255,15 +255,27 @@ export function clearEditedKitImage(side) {
   }
 }
 
-/** True once the user has saved a design or placed an order at least once */
-export function hasPickedDesign() {
-  try {
-    if (localStorage.getItem(DESIGN_STORAGE_KEY)) return true;
-    const saved = JSON.parse(localStorage.getItem(SAVED_DESIGNS_KEY) || '[]');
-    return Array.isArray(saved) && saved.length > 0;
-  } catch {
-    return false;
-  }
+/**
+ * Loads the current user's most recently saved design into the "in-progress design" slot that
+ * Customize.jsx's loadStoredDesign() reads on mount — so navigating to /customize afterwards
+ * opens it, the same way reopening the tab reopens whatever was last being edited.
+ *
+ * Returns true if a saved design existed and was loaded, false if the user has none yet — the
+ * caller (Navbar's "My Designs") navigates to /customize either way, since with none saved that
+ * is exactly today's behaviour (open the customizer on whatever is already there).
+ *
+ * Each saved-designs entry carries `id`/`kitTypeLabel` alongside the actual design fields (see
+ * Customize.jsx's handleSave) — bookkeeping for a future list UI, not part of the design itself.
+ * Both are stripped before writing: the backend's designSchema is `.strict()`, so leaving them in
+ * would 422 the moment this design reached an order.
+ */
+export function loadMostRecentSavedDesign(userId) {
+  const saved = readSavedDesigns(userId);
+  if (saved.length === 0) return false;
+
+  const { id, kitTypeLabel, ...designFields } = migrateDesign(saved.at(-1));
+  writeStorage(DESIGN_STORAGE_KEY, JSON.stringify(designFields));
+  return true;
 }
 
 /** Migrates a legacy position id (e.g. 'TL') to the {x,y} anchor shape; passes {x,y} values through untouched */
@@ -324,6 +336,17 @@ export function migrateDesign(parsed) {
     logoPosition: normalizePosition(parsed.logoPosition, DEFAULT_DESIGN.logoPosition),
     playerName: normalizeBySide(parsed.playerName, DEFAULT_DESIGN.playerName),
     playerNumber: normalizeBySide(parsed.playerNumber, DEFAULT_DESIGN.playerNumber),
+    /**
+     * REPAIRS a design saved before maxNumberSizeFor's floor-guard existed. A garment switch onto
+     * a tiny safe area (headband, trousers, cap — all below NUMBER_SIZE_MIN) used to store the
+     * UNFLOORED maxTextSizeFor value with no minimum, so a design could sit in a cart looking
+     * fine while every quote/checkout attempt 422'd on numberSize with no way for the user to see
+     * why. A pure floor, not a re-shrink: the render-time clamp in KitPreview (via maxTextSizeFor
+     * directly) already independently caps what's actually drawn regardless of this stored value,
+     * so raising a corrupted 7/13/15 up to 20 changes nothing on screen — it only makes the value
+     * valid again.
+     */
+    numberSize: Math.max(NUMBER_SIZE_MIN, parsed.numberSize ?? DEFAULT_DESIGN.numberSize),
   };
 }
 
@@ -865,4 +888,28 @@ export function maxLogoScaleFor(kitType, kitProduct = null) {
   const maxPx = maxLogoSizeFor(kitType, kitProduct);
   const rawScale = ((maxPx - 18) / 42) * 100;
   return Math.max(30, Math.min(150, Math.floor(rawScale)));
+}
+
+/** The schema's own numberSize floor (orders.schema.js: numberSize min 20) — also the manual
+ *  slider's own `min` in Customize.jsx. One constant so the two cannot drift apart. */
+export const NUMBER_SIZE_MIN = 20;
+
+/**
+ * The largest numberSize a garment switch may shrink the STORED value to, floored at
+ * NUMBER_SIZE_MIN — mirrors maxLogoScaleFor exactly, for exactly the same reason.
+ *
+ * `maxTextSizeFor` alone is NOT this: it is shared with nameSize's render-time clamp, whose floor
+ * is 8, not 20, so it cannot bake in numberSize's floor without wrongly capping nameSize too. A
+ * tiny safe area (headband: 7, trousers: 15, cap: 13 — all below 20) previously reached the
+ * garment-switch clamp uncapped, producing a design the backend's own schema then rejected on
+ * every quote/checkout attempt: valid enough to add to a cart, permanently unable to check out.
+ *
+ * The render-time clamp in KitPreview (via maxTextSizeFor directly) is unaffected and remains the
+ * actual visual backstop regardless of what gets stored — same split as maxLogoSizeFor/
+ * maxLogoScaleFor above. A number on a genuinely tiny shape may render slightly fuller than the
+ * safe area's own fraction would ideally allow; it was never going to fit at a legible size
+ * there regardless, and a small overflow is the honest tradeoff for "this can still be ordered."
+ */
+export function maxNumberSizeFor(kitType, kitProduct = null) {
+  return Math.max(NUMBER_SIZE_MIN, maxTextSizeFor(kitType, kitProduct));
 }

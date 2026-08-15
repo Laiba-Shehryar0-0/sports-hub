@@ -128,10 +128,55 @@ export async function findByIdempotencyKey(key, db = pool) {
 }
 
 /**
- * `findByReference` was deleted in Phase 5 (2026-08-13). It had no callers — it was written in
- * anticipation of GET /orders/:reference, which is still not in scope — and it selected two
- * columns migration 008 dropped, so keeping it meant maintaining dead SQL. When order history
- * lands it wants writing against the schema of that day, including the ownership WHERE clause
- * (CLAUDE.md rule 6) that this one already had: `WHERE reference = ? AND user_id = ?`, 404 not
- * 403 when it is not the caller's.
+ * Serves GET /orders/:reference. Ownership is IN the WHERE clause (CLAUDE.md rule 6) — a
+ * reference belonging to someone else returns no row, and the service turns that into 404, never
+ * 403, so a caller cannot tell "not yours" apart from "doesn't exist." Index: uq_order_ref
+ * (reference) narrows to at most one row before user_id is even checked.
+ *
+ * (This replaces the original `findByReference`, deleted in Phase 5 (2026-08-13) as dead code
+ * written in anticipation of this endpoint before it existed. Same WHERE shape as planned then.)
  */
+export async function findByReferenceAndUser(reference, userId, db = pool) {
+  const [rows] = await db.execute(
+    `SELECT ${ORDER_SUMMARY_COLUMNS}, created_at FROM orders WHERE reference = ? AND user_id = ? LIMIT 1`,
+    [reference, userId],
+  );
+  return rows[0] ?? null;
+}
+
+/**
+ * Serves GET /orders (mine) — one page of the caller's own orders, newest first.
+ * Index: idx_order_user (user_id, created_at) — leading column is the WHERE, trailing column
+ * satisfies ORDER BY ... DESC scanned backwards. No filesort.
+ *
+ * `limit`/`offset` are inlined, not `?`-bound (CLAUDE.md rule 1: "LIMIT/OFFSET only after zod
+ * bounds them to integers"). mysql2's execute() (server-side prepared statements) has a long
+ * history of rejecting LIMIT/OFFSET as bound parameters depending on version — inlining sidesteps
+ * that entirely rather than depending on being on a version where it happens to work. Safe here
+ * ONLY because both values already passed through listOrdersQuerySchema's z.coerce.number().int()
+ * bounds before reaching this function — never raw request input.
+ */
+export async function findOrdersByUser(userId, { limit, offset }, db = pool) {
+  // Not the validation itself — the schema is — but a wiring mistake that skipped it must not
+  // become a SQL string built from an arbitrary value, so this fails loudly instead.
+  if (!Number.isInteger(limit) || !Number.isInteger(offset)) {
+    throw new Error('findOrdersByUser requires integer limit/offset.');
+  }
+
+  const [rows] = await db.execute(
+    `SELECT ${ORDER_SUMMARY_COLUMNS}, created_at FROM orders
+     WHERE user_id = ? ORDER BY created_at DESC LIMIT ${limit} OFFSET ${offset}`,
+    [userId],
+  );
+  return rows;
+}
+
+/** The caller's total order count, for the list endpoint's pagination metadata. Same index as
+ *  findOrdersByUser — user_id is the leading column, so this is an index-only count. */
+export async function countOrdersByUser(userId, db = pool) {
+  const [[row]] = await db.execute(
+    'SELECT COUNT(*) AS n FROM orders WHERE user_id = ?',
+    [userId],
+  );
+  return row.n;
+}

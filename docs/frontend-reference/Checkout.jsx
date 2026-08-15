@@ -1,15 +1,16 @@
-// Snapshot of ../kit-frontend as of 2026-08-14 — reference only, do not edit here.
+// Snapshot of ../kit-frontend as of 2026-08-15 — reference only, do not edit here.
 // Source: src/pages/Checkout.jsx
 
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { useCart } from '../context/CartContext';
 import { Link, useNavigate } from 'react-router-dom';
 import KitPreview from '../customize/KitPreview';
-import { required, validateFields } from '../utils/validation';
+import { required, validateFields, stripNonPhoneChars } from '../utils/validation';
 import { placeOrder } from '../api/ordersService';
 import {
   SHIPPING_COUNTRIES, DOMESTIC_COUNTRY, allowedDeliveryIds, isDeliveryAllowedForCountry,
 } from '../data/countries';
+import { PAKISTAN_PROVINCES } from '../data/provinces';
 import {
   // DELIVERY_METHODS carries names, ETAs and descriptions — no money at all since its `price`
   // and `priceLabel` were deleted. Delivery money comes from the quote, like every other figure.
@@ -53,7 +54,7 @@ export default function Checkout() {
   const [instructions, setInstructions] = useState('');
 
   const [contact, setContact] = useState({ firstName: '', lastName: '', email: '', phone: '', clubName: '' });
-  const [address, setAddress] = useState({ street: '', city: '', province: '', postalCode: '', country: 'Pakistan' });
+  const [address, setAddress] = useState({ street: '', city: '', province: '', country: 'Pakistan' });
 
   const [paymentId, setPaymentId] = useState('bank');
 
@@ -118,25 +119,33 @@ export default function Checkout() {
   const setAddressField = setField(setAddress);
 
   /**
-   * Changing country can invalidate the selected delivery method, so they move together.
-   * Leaving a now-illegal deliveryId in state would submit an order the API rejects with a
-   * cross-field 422 the user has no obvious way to act on.
+   * Changing country can invalidate both the selected delivery method and the typed province —
+   * they move together. Leaving a now-illegal deliveryId in state would submit an order the API
+   * rejects with a cross-field 422 the user has no obvious way to act on; province is the same
+   * problem in the other direction, since it switches between a fixed dropdown (Pakistan) and
+   * free text (everywhere else) and a value valid under one meaning is essentially never valid
+   * under the other ("Punjab" is not a UK county, "Greater London" is not a Pakistani province).
    */
   const setCountry = useCallback((country) => {
-    setAddress(prev => ({ ...prev, country }));
+    setAddress(prev => ({ ...prev, country, province: '' }));
     setDeliveryId(prev => (isDeliveryAllowedForCountry(country, prev) ? prev : allowedDeliveryIds(country)[0]));
   }, []);
 
   const handlePlaceOrder = useCallback(async () => {
+    // province is only a required select for a Pakistan address — everywhere else it is free
+    // text and the API accepts it blank, so it has no place in this schema for those addresses.
+    const isDomestic = address.country === DOMESTIC_COUNTRY;
     const values = {
       firstName: contact.firstName, lastName: contact.lastName,
       email: contact.email, phone: contact.phone,
       street: address.street, city: address.city,
+      ...(isDomestic ? { province: address.province } : {}),
     };
     const schema = {
       firstName: [required()], lastName: [required()],
       email: [required()], phone: [required()],
       street: [required()], city: [required()],
+      ...(isDomestic ? { province: [required('Select a province.')] } : {}),
     };
     const nextErrors = validateFields(values, schema);
     setErrors(nextErrors);
@@ -241,16 +250,31 @@ export default function Checkout() {
               <TextField label="First Name" required value={contact.firstName} error={errors.firstName} onChange={v => { setContactField('firstName', v); setErrors(e => ({ ...e, firstName: false })); }} />
               <TextField label="Last Name" required value={contact.lastName} error={errors.lastName} onChange={v => { setContactField('lastName', v); setErrors(e => ({ ...e, lastName: false })); }} />
               <TextField label="Email Address" required type="email" placeholder="team@club.com" value={contact.email} error={errors.email} onChange={v => { setContactField('email', v); setErrors(e => ({ ...e, email: false })); }} />
-              <TextField label="Phone Number" required placeholder="+92 3XX XXXXXXX" value={contact.phone} error={errors.phone} onChange={v => { setContactField('phone', v); setErrors(e => ({ ...e, phone: false })); }} />
+              <TextField label="Phone Number" required placeholder="+92 3XX XXXXXXX" maxLength={20} value={contact.phone} error={errors.phone} onChange={v => { setContactField('phone', stripNonPhoneChars(v)); setErrors(e => ({ ...e, phone: false })); }} />
             </div>
             <TextField label="Club / Team Name" placeholder="e.g. FC United Sialkot" value={contact.clubName} onChange={v => setContactField('clubName', v)} />
 
             <h4 className="text-[12px] font-bold tracking-[1px] uppercase text-gold mt-2">Shipping Address</h4>
             <TextField label="Street Address" required placeholder="House #, Street, Area" value={address.street} error={errors.street} onChange={v => { setAddressField('street', v); setErrors(e => ({ ...e, street: false })); }} />
-            <div className="grid grid-cols-3 gap-4 max-[640px]:grid-cols-1">
+            <div className="grid grid-cols-2 gap-4 max-[640px]:grid-cols-1">
               <TextField label="City" required value={address.city} error={errors.city} onChange={v => { setAddressField('city', v); setErrors(e => ({ ...e, city: false })); }} />
-              <TextField label="Province" value={address.province} onChange={v => setAddressField('province', v)} />
-              <TextField label="Postal Code" value={address.postalCode} onChange={v => setAddressField('postalCode', v)} />
+              {address.country === DOMESTIC_COUNTRY ? (
+                <div className="flex flex-col gap-[6px]" data-field-error={errors.province ? 'true' : undefined}>
+                  <label htmlFor="checkout-province" className={errors.province ? 'text-[11px] font-bold tracking-[0.8px] uppercase text-red-light' : fieldLabelCls}>Province *</label>
+                  <select
+                    id="checkout-province"
+                    value={address.province}
+                    onChange={e => { setAddressField('province', e.target.value); setErrors(err => ({ ...err, province: false })); }}
+                    className={errors.province ? `${inputCls} border-red-light` : inputCls}
+                  >
+                    <option value="" disabled>Select province</option>
+                    {PAKISTAN_PROVINCES.map(p => <option key={p} value={p}>{p}</option>)}
+                  </select>
+                  {errors.province && <p role="alert" className="text-[11px] text-red-light">{errors.province}</p>}
+                </div>
+              ) : (
+                <TextField label="Province / Region" value={address.province} onChange={v => setAddressField('province', v)} />
+              )}
             </div>
             <div className="flex flex-col gap-[6px]">
               <label htmlFor="checkout-country" className="text-[11px] font-bold tracking-[0.3px] text-onsurface-500">Country</label>

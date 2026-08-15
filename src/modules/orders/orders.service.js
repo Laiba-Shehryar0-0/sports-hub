@@ -2,6 +2,7 @@ import * as ordersRepository from './orders.repository.js';
 import { computeCartPricing, listDeliveryOptions } from '../pricing/pricing.service.js';
 import { TEMPLATE_NAMES, SPORT_LABELS, MIN_TOTAL_KITS } from '../pricing/pricing.constants.js';
 import { storeFromDataUrl, isImageDataUrl, assetExists } from '../assets/assets.service.js';
+import { sendOrderConfirmationEmail } from './orders.mailer.js';
 import { withTransaction } from '../../db/tx.js';
 import { logger } from '../../utils/logger.js';
 import { AppError } from '../../utils/AppError.js';
@@ -99,6 +100,17 @@ export async function placeOrder({ body, userId = null, idempotencyKey = null, i
       const reference = ordersRepository.buildReference(id);
       await ordersRepository.setReference(id, reference, db);
       return { id, reference };
+    });
+
+    // Outside the transaction and not awaited, same reasoning as the verification email in
+    // auth.service.js: SMTP latency/failure must never hold a pool connection open or slow the
+    // response to a customer who already paid (or is about to, for 'bank'). NEW orders only —
+    // the catch block's replay path below must not re-send this, or a double-click / retried
+    // request would email the customer twice for the one order.
+    void sendOrderConfirmationEmail({
+      to: body.contact.email,
+      order: { reference: order.reference, pricing },
+      paymentId: body.paymentId,
     });
 
     return {
@@ -240,19 +252,65 @@ async function resolveLogo(design, userId) {
 }
 
 /**
- * Rebuilds the contract response from stored rows, for the idempotent-replay path.
+ * Serves GET /orders/:reference. Ownership already lives in the repository's WHERE clause
+ * (CLAUDE.md rule 6), so a row that comes back null covers both "no such order" and "not yours" —
+ * this always answers 404, never 403, so a caller cannot distinguish the two.
+ */
+export async function getOrderForUser(reference, userId) {
+  const row = await ordersRepository.findByReferenceAndUser(reference, userId);
+  if (!row) {
+    throw new AppError('Order not found.', { statusCode: 404, code: 'ORDER_NOT_FOUND' });
+  }
+  return toOrderResponse(row, { createdAt: row.created_at });
+}
+
+/**
+ * Serves GET /orders (mine). Metadata only — kitType/kitProduct/design_json never travel here,
+ * matching the "list endpoints return metadata only" rule that ORDER_SUMMARY_COLUMNS already
+ * enforces for every other reader of `orders`. Anyone wanting a line's contents fetches the
+ * single order via getOrderForUser.
+ */
+export async function listOrdersForUser(userId, { page, limit }) {
+  const offset = (page - 1) * limit;
+  const [rows, total] = await Promise.all([
+    ordersRepository.findOrdersByUser(userId, { limit, offset }),
+    ordersRepository.countOrdersByUser(userId),
+  ]);
+
+  return {
+    orders: rows.map((row) => ({
+      id: row.id,
+      reference: row.reference,
+      status: row.status,
+      totalKits: row.total_kits,
+      total: row.total_price,
+      createdAt: row.created_at,
+    })),
+    page,
+    limit,
+    total,
+  };
+}
+
+/**
+ * Rebuilds the contract response from stored rows — shared by the idempotent-replay path (POST
+ * /orders) and GET /orders/:reference, which is the same question asked at a different time
+ * ("what did this order end up being") and must answer it identically.
  *
  * Every figure comes from the persisted columns, never from a recompute. A price could have
- * changed between the original order and the retry, and the reply must state what was actually
- * charged.
+ * changed since the order was placed, and the response must state what was actually charged.
+ *
+ * `createdAt` is an opt-in addition, not a shape change to the existing replay response: POST
+ * /orders's contract never included it, and adding a field there was not part of this change.
  */
-async function toOrderResponse(row) {
+async function toOrderResponse(row, { createdAt } = {}) {
   const items = await ordersRepository.findItemsByOrderId(row.id);
 
   return {
     id: row.id,
     reference: row.reference,
     status: row.status,
+    ...(createdAt !== undefined ? { createdAt } : {}),
     pricing: {
       // kitLabel and deliveryName are absent here: they are presentation strings derived from
       // kit_prices/delivery_methods and are not persisted per line, so reproducing them would mean

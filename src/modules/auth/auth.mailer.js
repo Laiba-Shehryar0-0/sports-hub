@@ -1,6 +1,6 @@
-import nodemailer from 'nodemailer';
 import { env } from '../../config/env.js';
 import { logger } from '../../utils/logger.js';
+import { transport } from '../../utils/mailer.js';
 import { CODE_TTL_SECONDS } from './auth.verification.js';
 
 /**
@@ -21,16 +21,6 @@ const DEV_CODE_LOGGING = env.NODE_ENV === 'development';
 // Defence in depth: if the two conditions ever disagree, refuse to start rather than leak.
 if (DEV_CODE_LOGGING && env.isProduction) {
   throw new Error('Refusing to boot: dev code logging enabled in a production environment.');
-}
-
-let transport = null;
-if (env.SMTP_HOST) {
-  transport = nodemailer.createTransport({
-    host: env.SMTP_HOST,
-    port: env.SMTP_PORT,
-    secure: env.SMTP_PORT === 465, // implicit TLS on 465; STARTTLS is negotiated otherwise
-    auth: env.SMTP_USER ? { user: env.SMTP_USER, pass: env.SMTP_PASS } : undefined,
-  });
 }
 
 function buildMessage(to, code) {

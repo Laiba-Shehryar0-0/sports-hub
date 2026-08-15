@@ -32,3 +32,13 @@ export const createOrder = asyncHandler(async (req, res) => {
   // original for no benefit to the caller.
   res.status(201).json(order);
 });
+
+export const getOrder = asyncHandler(async (req, res) => {
+  const order = await ordersService.getOrderForUser(req.params.reference, req.user.id);
+  res.json(order);
+});
+
+export const listOrders = asyncHandler(async (req, res) => {
+  const result = await ordersService.listOrdersForUser(req.user.id, req.query);
+  res.json(result);
+});

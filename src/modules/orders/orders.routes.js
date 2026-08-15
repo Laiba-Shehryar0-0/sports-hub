@@ -4,8 +4,12 @@ import { validate } from '../../middlewares/validate.js';
 import { optionalAuth } from '../../middlewares/optionalAuth.js';
 import { requireAuth } from '../../middlewares/requireAuth.js';
 import { orderLimiter, quoteLimiter } from '../../middlewares/rateLimiters.js';
-import { createOrderSchema, quoteSchema } from './orders.schema.js';
-import { createOrder, quoteOrder } from './orders.controller.js';
+import {
+  createOrderSchema, quoteSchema, referenceParamSchema, listOrdersQuerySchema, emptyQuerySchema,
+} from './orders.schema.js';
+import {
+  createOrder, quoteOrder, getOrder, listOrders,
+} from './orders.controller.js';
 
 const router = Router();
 
@@ -44,6 +48,24 @@ router.post(
   optionalAuth,
   validate(createOrderSchema),
   createOrder,
+);
+
+/**
+ * GET /orders (mine) and GET /orders/:reference — order history. Both requireAuth: there is no
+ * guest concept for "my orders" the way there is for placing one, and ownership is what scopes
+ * every row either endpoint can return.
+ *
+ * No route-specific rate limiter, unlike POST / and POST /quote — those are abuse/spam surfaces
+ * because /orders accepts unauthenticated traffic; these two run only for an identified user
+ * behind requireAuth, same posture as GET /auth/me.
+ */
+router.get('/', requireAuth, validate(listOrdersQuerySchema, 'query'), listOrders);
+router.get(
+  '/:reference',
+  requireAuth,
+  validate(referenceParamSchema, 'params'),
+  validate(emptyQuerySchema, 'query'),
+  getOrder,
 );
 
 export default router;

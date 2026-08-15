@@ -78,24 +78,33 @@ DELETE FROM email_verifications WHERE token_expires_at < NOW() - INTERVAL 30 DAY
 
 ---
 
-## 🔴 "Design saved" saves nothing that can ever be restored
+## 🟡 "My Designs" opens only the single most recent save — no list, no delete
 
-Frontend, `kit-frontend`. The Save button in `Customize.jsx` appends the design to
-`kitlab_saved_designs` in `localStorage` — and **nothing ever reads that array's contents back**.
-The only reader is `hasPickedDesign()` in `src/customize/kitShapes.js`, which checks
-`length > 0` as a checkout gate. There is no saved-designs list, no restore, and no delete UI.
+Frontend, `kit-frontend`. **Partially fixed 2026-08-15** — restore now exists, which is the half
+that was actually missing; what remains is a real, smaller gap, not the original one.
 
-So the button makes a promise the app cannot keep. A user who saves ten designs, closes the tab and
-returns has no way to reach any of them, and nothing tells them that.
+**What changed.** The Save button in `Customize.jsx` still appends to a `kitlab_saved_designs`
+array, but that array is now namespaced per user (`savedDesignsKey(userId)` in
+`designStorage.js`, mirroring `cart.js`'s `cartKey`) instead of one shared global key — a
+prerequisite for "restore" to mean anything once two accounts share a machine. The navbar's
+"My Designs" link is a button now, not a plain `<Link>`: it calls
+`loadMostRecentSavedDesign(userId)` (`kitShapes.js`), which writes the newest saved entry into
+`kitlab_current_design` — the same slot `loadStoredDesign()` already reads on mount — then
+navigates to `/customize`. The save toast now says "open it anytime from My Designs" because that
+became true.
 
-**Contained, not fixed (2026-08-08):** the toast now reads "Design saved to this browser" rather
-than "Design saved", so it no longer implies the design can be reopened, and the array is capped at
-20 entries (FIFO) so it cannot grow without bound against the ~5MB origin budget. Dropping the
-oldest is acceptable *only* because nothing can retrieve them; if a saved-designs list is ever
-built, that reasoning expires and the cap needs revisiting at the same time.
+**What is still missing, deliberately, as the smallest fix that satisfied the actual ask.** There
+is still no list UI and no delete UI — clicking "My Designs" always opens the SINGLE most recently
+saved design, with no way to see or reach the older ones sitting in the (still 20-entry-capped)
+array beneath it, and the FIFO cap still silently drops the oldest once the array fills. Building
+a list/restore/delete UI, as this entry originally proposed, remains the way to close that.
 
-**To fix properly:** either build the list/restore/delete UI the button implies, or remove the
-button. The middle state — a save that silently goes nowhere — is the worst of the three.
+**A known rough edge, inherited from the pre-existing `?kit=` pattern in the same lazy
+initializer:** clicking "My Designs" while already sitting on `/customize` writes the design but
+does not visibly refresh the page — React Router does not remount on a same-route navigation, so
+`loadStoredDesign()` does not re-run. Opening it from any other page (the actual use case for a
+nav-menu link) is unaffected. This was an accepted trade-off for `?kit=` already; extending it here
+rather than solving both at once kept the fix scoped to what was asked.
 
 ---
 
@@ -119,6 +128,44 @@ code has no toast to reuse the way `Customize.jsx` did.
 **When it is picked up**, `writeStorage`/`classifyStorageError` in
 `src/customize/designStorage.js` already exist and should be reused rather than reimplemented —
 they carry the quota-vs-blocked distinction, including the Safari private-mode case.
+
+---
+
+## ✅ A garment switch could store a numberSize the backend's own schema rejects — FIXED 2026-08-15
+
+*Caught live: a real cart (Cricket Sweater, Goalkeeper Shirt, Cricket Shirt, Cricket Trousers, and
+more) hit `POST /orders/quote`'s error banner with "Number size: Number must be greater than or
+equal to 20" — a design that had added to the cart successfully was permanently unable to price
+or check out, with no indication which item or why.*
+
+Frontend, `kit-frontend`. Switching to a garment with a small printable safe area — Cricket
+Trousers (`maxTextSizeFor` = 15), Basketball Headband (= 7), Cricket Cap (= 13), all below
+`numberSize`'s schema floor of 20 — shrank the stored `numberSize` via bare `maxTextSizeFor`, with
+no minimum. The manual slider itself is bounded `min={20}`, and so is the backend schema
+(`orders.schema.js`); only the AUTOMATIC shrink-on-switch skipped that floor. The design still
+added to a cart looking correct — the render-time clamp in `KitPreview` (via `maxTextSizeFor`
+directly) already independently caps what's actually drawn, so nothing looked wrong — but every
+`POST /orders/quote` and `POST /orders` then 422'd on `numberSize`, unrecoverably, for any cart
+containing that line.
+
+**The pattern that should have caught this already existed**, one function over:
+`maxLogoScaleFor` floors its result at the schema's own logoScale minimum (30) for exactly this
+reason — its own comment says so. `maxTextSizeFor` has no equivalent, deliberately: it is shared
+with `nameSize`'s render-time clamp, whose floor is 8, not 20, so baking a 20-floor into it would
+have wrongly capped `nameSize` too.
+
+**Fix:** a new `maxNumberSizeFor` (`kitShapes.js`) — `Math.max(NUMBER_SIZE_MIN, maxTextSizeFor(...))`
+— mirroring `maxLogoScaleFor` exactly, used at both garment-switch call sites in `Customize.jsx`
+instead of the raw function. The slider's own `min={20}` now reads the same `NUMBER_SIZE_MIN`
+constant, so the two cannot drift apart the way this bug's absence of a shared constant let happen
+in the first place.
+
+**Existing corrupted data was not left to fix itself.** `migrateDesign` — already the one place
+`loadStoredDesign` and `cart.js`'s `readCart` share for repairing a design saved before an earlier
+contract change (see the FIXED entry below) — now also floors any already-stored `numberSize`
+below 20 back up to 20 on every read. Since the render-time clamp was always the real visual
+backstop regardless of what's stored, this repair changes nothing on screen; it only makes an
+already-broken cart line valid again, with no action required from whoever is already carrying one.
 
 ---
 
@@ -264,29 +311,31 @@ line by shape, colours, template, name and number, which is what it is for.
 
 ---
 
-## 🟡 An idempotent replay of a cart order returns a slightly different shape
+## 🟡 A cart order's replay/history response omits `kitLabel`/`deliveryName` — settled, not fixed
 
 `POST /orders` returns `pricing` built by `computeCartPricing`, whose per-line objects include
 `kitLabel` and whose top level includes `deliveryName`. **A replay of that same request — the
-double-click path, matched on `Idempotency-Key` — omits both.**
+double-click path, matched on `Idempotency-Key` — omits both, and so does `GET
+/orders/:reference` (2026-08-15), which shares the same `toOrderResponse` builder.**
 
 They are presentation strings derived from `kit_prices` and `delivery_methods` and are not
-persisted on `order_items`. Every other figure in the replay comes from the stored columns, which
-is deliberate: a replay must state what was actually **charged**, never a recompute, because a
-price can change between the original order and the retry.
+persisted on `order_items`. Every other figure comes from the stored columns, which is deliberate:
+both the replay and order history must state what was actually **charged**, never a recompute,
+because a price can change after the order was placed.
 
-**Re-deriving the labels was considered and rejected.** Looking them up at replay time would report
-labels from tables whose contents may have moved since the order was placed — a line that says
-"Polo" today and something else tomorrow for the same order. Absent is better than wrong.
+**Re-deriving the labels was considered and rejected, again, when order history landed.**
+Looking them up at read time would report labels from tables whose contents may have moved since
+the order was placed — a line that says "Polo" today and something else tomorrow for the same
+order, which is wrong in exactly the way a receipt must not be. `kitProduct` (already a snapshot,
+stored precisely so this problem doesn't recur) is what `GET /orders/:reference` shows instead —
+this is the "settle whether these labels are wanted" the entry used to say order history would
+decide. It decided: no, not as a re-derived lookup.
 
-**Why this is logged rather than fixed:** the fix is to persist the labels on `order_items`, and
-that is a schema change for a presentation string. It belongs with **order history in Phase 5**,
-when the renderer's actual needs are known — building `GET /orders/:reference` will settle whether
-these labels are wanted per line at all, or whether `kit_product` (already stored as a snapshot for
-exactly this reason) is the right thing to show.
-
-**Whoever builds order history should read this first.** The replay path in
-`orders.service.toOrderResponse` is where the difference lives.
+**Still not fixed, deliberately, and now with a real caller to weigh it against:** persisting
+`kitLabel`/`templateName`'s source label and `deliveryName` onto `order_items`/`orders` at write
+time (not looked up later) would close this without the staleness risk above. Worth doing if a
+future order-history UI wants a friendlier label than `kitProduct`/`kitType` provide — nothing
+observed from the frontend built alongside this entry needed it.
 
 ---
 
@@ -360,12 +409,21 @@ migration 008 dropped the former on 2026-08-13; the lines table is now the only 
 
 ---
 
-## 🟠 `trust proxy` is not set
+## 🟡 `trust proxy` defaults to unset — must be configured at deploy time behind a reverse proxy
 
-`src/app.js` never calls `app.set('trust proxy', …)`. Correct today (direct connections, so
-`req.ip` is the real peer). Behind nginx/Cloudflare/a load balancer, **every client collapses into
-one rate-limit key** and `sessions.ip` records the proxy. Set a specific hop count or subnet at
-that point — never `true`, which lets anyone spoof `X-Forwarded-For`.
+*(Updated 2026-08-15: now configurable via `TRUST_PROXY` in `env.js`/`app.js`, previously there
+was no way to set it without a code change.)*
+
+Blank/unset (the default) means Express trusts nobody, which is correct for a direct connection —
+dev, test, and any deploy that isn't behind a proxy. Behind nginx/Cloudflare/a load balancer,
+leaving it unset makes **every client collapse into one rate-limit key** and `sessions.ip` record
+the proxy's address instead of the caller's.
+
+**Still requires a real operational decision at deploy time** — this doc can't know the actual
+hop count or trusted subnet for wherever this ends up hosted. Set `TRUST_PROXY` to a hop count
+(`"1"` for one reverse proxy in front of the app) or a comma-separated trusted IP/CIDR list.
+`env.js` rejects `"true"`/`"false"`/`"*"` outright — Express's own docs call `true` unsafe, since
+it trusts the leftmost `X-Forwarded-For` hop, which is client-supplied and trivially spoofed.
 
 ---
 
