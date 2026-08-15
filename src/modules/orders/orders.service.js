@@ -111,6 +111,7 @@ export async function placeOrder({ body, userId = null, idempotencyKey = null, i
       to: body.contact.email,
       order: { reference: order.reference, pricing },
       paymentId: body.paymentId,
+      name: `${body.contact.firstName} ${body.contact.lastName}`,
     });
 
     return {

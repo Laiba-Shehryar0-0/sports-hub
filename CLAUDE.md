@@ -1,4 +1,4 @@
-# Kit World Sports — Backend
+# D Sports Hub — Backend
 
 Node.js + Express 4 + MySQL 8 REST API. The React frontend (Vite, Fabric.js v7) already
 exists in a sibling folder and codes against a fixed contract — see `docs/API_CONTRACT.md`

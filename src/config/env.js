@@ -96,7 +96,7 @@ const envSchema = z.object({
   SMTP_USER: optionalEnvString,
   SMTP_PASS: optionalEnvString,
   SMTP_FROM: optionalEnvString.pipe(
-    z.string().default('Kit World Sports <no-reply@kitworldsports.local>'),
+    z.string().default('D Sports Hub <no-reply@dsportshub.local>'),
   ),
 
   // Shown in the order-confirmation email for a `paymentId: 'bank'` order, so the customer knows

@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { MAX_TOTAL_KITS, MAX_CART_ITEMS } from '../pricing/pricing.constants.js';
 import {
   SHIPPING_COUNTRIES, DOMESTIC_COUNTRY, PAKISTAN_PROVINCES,
-  allowedDeliveryIds, isDeliveryAllowedForCountry,
+  allowedDeliveryIds, isDeliveryAllowedForCountry, provinceForCity,
 } from './orders.constants.js';
 import {
   MAX_DATA_URL_CHARS, DATA_URL_PREFIX_RE, STORED_LOGO_URL_RE,
@@ -141,7 +141,18 @@ const baseOrder = z.object({
     firstName: z.string().trim().min(1).max(60),
     lastName: z.string().trim().min(1).max(60),
     email: z.string().trim().toLowerCase().email().max(190),
-    phone: z.string().trim().regex(/^[0-9+\-\s()]{7,20}$/, 'Enter a valid phone number.'),
+    // Format-bounded first (charset + overall length), then digit-COUNTED separately: a Pakistani
+    // number is 11 digits local (03XXXXXXXXX) or 13 digits with the country code (923XXXXXXXXX,
+    // with or without a leading '+' — the '+' isn't a digit, so it doesn't change the count).
+    // Two checks because they catch different mistakes: the regex rejects letters/junk characters,
+    // the digit count catches "the right characters, the wrong length" (03331212312312, or the
+    // truncated/duplicated garbage a stray extra keystroke produces).
+    phone: z.string().trim()
+      .regex(/^[0-9+\-\s()]{7,20}$/, 'Enter a valid phone number.')
+      .refine((v) => {
+        const digitCount = (v.match(/\d/g) ?? []).length;
+        return digitCount === 11 || digitCount === 13;
+      }, 'Phone number must be 11 digits (03XXXXXXXXX) or 13 digits with the country code (923XXXXXXXXX).'),
     clubName: optionalText(120),
   }).strict(),
   address: z.object({
@@ -206,6 +217,28 @@ function provinceValidForCountry(order, ctx) {
 }
 
 /**
+ * Cross-field rule: a well-known city must actually be in the selected province — the "Karachi,
+ * Balochistan" case. Only fires when `city` matches an entry in MAJOR_CITY_PROVINCE (see that
+ * constant's own comment for why): an unlisted town is not flagged, because this app cannot tell
+ * a real small-town address from a typo, and wrongly rejecting the former is worse than missing
+ * the latter. Only meaningful for a domestic address — province is free text internationally, so
+ * there is nothing to cross-check there.
+ */
+function cityMatchesProvince(order, ctx) {
+  if (order.address.country !== DOMESTIC_COUNTRY) return;
+
+  const expectedProvince = provinceForCity(order.address.city);
+  if (expectedProvince && expectedProvince !== order.address.province) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['address', 'city'],
+      message: `${order.address.city.trim()} is in ${expectedProvince}, not ${order.address.province || 'the selected province'}.`,
+      params: { expectedProvince },
+    });
+  }
+}
+
+/**
  * The multi-item shape the cart sends — the ONLY shape accepted, since Phase 5.
  *
  * ┌─ THE LEGACY SINGLE-DESIGN BRANCH WAS REMOVED ON 2026-08-13 ───────────────────────────────────┐
@@ -224,7 +257,8 @@ export const createOrderSchema = baseOrder.extend({
   items: z.array(cartItemSchema)
     .min(1, 'Your cart is empty.')
     .max(MAX_CART_ITEMS, `A cart can hold at most ${MAX_CART_ITEMS} designs.`),
-}).strict().superRefine(deliveryMatchesCountry).superRefine(provinceValidForCountry);
+}).strict().superRefine(deliveryMatchesCountry).superRefine(provinceValidForCountry)
+  .superRefine(cityMatchesProvince);
 
 /**
  * POST /orders/quote — price a cart in progress. Creates nothing.

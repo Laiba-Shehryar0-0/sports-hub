@@ -5,7 +5,9 @@ import { useState, useCallback, useEffect, useRef } from 'react';
 import { useCart } from '../context/CartContext';
 import { Link, useNavigate } from 'react-router-dom';
 import KitPreview from '../customize/KitPreview';
-import { required, validateFields, stripNonPhoneChars } from '../utils/validation';
+import {
+  required, validateFields, stripNonPhoneChars, phoneDigitCount,
+} from '../utils/validation';
 import { placeOrder } from '../api/ordersService';
 import {
   SHIPPING_COUNTRIES, DOMESTIC_COUNTRY, allowedDeliveryIds, isDeliveryAllowedForCountry,
@@ -143,7 +145,7 @@ export default function Checkout() {
     };
     const schema = {
       firstName: [required()], lastName: [required()],
-      email: [required()], phone: [required()],
+      email: [required()], phone: [required(), phoneDigitCount()],
       street: [required()], city: [required()],
       ...(isDomestic ? { province: [required('Select a province.')] } : {}),
     };

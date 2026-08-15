@@ -57,7 +57,7 @@ function validOrder({ design, contact, address, root, size = 'M', quantity = 11 
     items: [{ design: baseDesign(design), size, quantity }],
     contact: {
       firstName: 'Jane', lastName: 'Doe', email: 'jane@example.com',
-      phone: '+92 300 1234567', clubName: '',
+      phone: '0300 1234567', clubName: '',
       ...contact,
     },
     address: {
@@ -294,7 +294,7 @@ describe('POST /api/orders — the legacy single-design body is rejected', () =>
     design: baseDesign(),
     contact: {
       firstName: 'Jane', lastName: 'Doe', email: 'jane@example.com',
-      phone: '+92 300 1234567', clubName: '',
+      phone: '0300 1234567', clubName: '',
     },
     address: {
       street: '12 Mall Road', city: 'Lahore', province: 'Punjab', country: 'Pakistan',
@@ -670,6 +670,7 @@ describe('POST /api/orders — confirmation email', () => {
     expect(args.to).toBe('confirm-me@example.com');
     expect(args.paymentId).toBe('bank');
     expect(args.order.reference).toBe(res.body.reference);
+    expect(args.name).toBe('Jane Doe'); // validOrder()'s default contact.firstName/lastName
   });
 
   it('is NOT attempted again on an idempotent replay of the same request', async () => {
@@ -869,7 +870,13 @@ describe('POST /api/orders — province validation and postalCode removal', () =
   });
 
   it.each(PAKISTAN_PROVINCES)('accepts %s as a Pakistan province', async (province) => {
-    const res = await request(app).post('/api/orders').send(validOrder({ address: { province } }));
+    // city deliberately NOT the default 'Lahore' (Punjab) — this test is about the PROVINCE
+    // value in isolation, and 'Lahore' would fail the city/province cross-check for every
+    // province except Punjab. 'Chakwal' is a real town outside MAJOR_CITY_PROVINCE, so it is
+    // never cross-checked against whatever province is under test here.
+    const res = await request(app).post('/api/orders').send(validOrder({
+      address: { city: 'Chakwal', province },
+    }));
     expect(res.status).toBe(201);
   });
 
@@ -884,6 +891,57 @@ describe('POST /api/orders — province validation and postalCode removal', () =
   it('accepts free-text province for an international address', async () => {
     const res = await request(app).post('/api/orders').send(validOrder({
       address: { country: 'United Kingdom', province: 'Greater London' },
+      root: { deliveryId: 'international' },
+    }));
+    expect(res.status).toBe(201);
+  });
+});
+
+/**
+ * Caught live: a real checkout could enter city "Karachi" with province "Balochistan" — Karachi
+ * is in Sindh — and the order went through anyway, since city and province were validated
+ * independently with no cross-check between them.
+ */
+describe('POST /api/orders — city must be in the selected province', () => {
+  it('rejects a well-known city paired with the wrong province', async () => {
+    const res = await request(app).post('/api/orders').send(validOrder({
+      address: { city: 'Karachi', province: 'Balochistan' },
+    }));
+    expect(res.status).toBe(422);
+    expect(JSON.stringify(res.body.details)).toMatch(/Karachi is in Sindh/);
+  });
+
+  it('accepts the same city paired with its real province', async () => {
+    const res = await request(app).post('/api/orders').send(validOrder({
+      address: { city: 'Karachi', province: 'Sindh' },
+    }));
+    expect(res.status).toBe(201);
+  });
+
+  it('is case- and whitespace-insensitive', async () => {
+    const res = await request(app).post('/api/orders').send(validOrder({
+      address: { city: '  kaRACHI  ', province: 'Sindh' },
+    }));
+    expect(res.status).toBe(201);
+  });
+
+  it('maps Islamabad to Punjab — it is a federal territory, not a selectable province', async () => {
+    const res = await request(app).post('/api/orders').send(validOrder({
+      address: { city: 'Islamabad', province: 'Punjab' },
+    }));
+    expect(res.status).toBe(201);
+  });
+
+  it('does not block a city that is not in the known-cities list — fails open, not closed', async () => {
+    const res = await request(app).post('/api/orders').send(validOrder({
+      address: { city: 'Chakwal', province: 'Sindh' }, // a real Punjab town, deliberately unlisted
+    }));
+    expect(res.status).toBe(201);
+  });
+
+  it('does not cross-check city/province for an international address', async () => {
+    const res = await request(app).post('/api/orders').send(validOrder({
+      address: { country: 'United Kingdom', city: 'Karachi', province: 'Yorkshire' },
       root: { deliveryId: 'international' },
     }));
     expect(res.status).toBe(201);
@@ -993,6 +1051,41 @@ describe('POST /api/orders — validation', () => {
   it('rejects an invalid deliveryId', async () => {
     const res = await request(app).post('/api/orders').send(validOrder({ root: { deliveryId: 'teleport' } }));
     expect(res.status).toBe(422);
+  });
+
+  /**
+   * Caught live: a real order's phone field ("033312123 1233 12" — 17 digits) sailed straight
+   * through the old regex, which only bounded overall STRING length (7-20 chars, formatting
+   * characters included), never digit COUNT. A Pakistani number is 11 digits local or 13 with
+   * the country code — nothing else.
+   */
+  describe('phone — digit count, not just charset', () => {
+    it.each([
+      ['11-digit local', '0300 1234567'],
+      ['13-digit with country code', '92 0300 1234567'],
+      ['11 digits with no formatting at all', '03001234567'],
+    ])('accepts %s', async (_label, phone) => {
+      const res = await request(app).post('/api/orders').send(validOrder({ contact: { phone } }));
+      expect(res.status).toBe(201);
+    });
+
+    it.each([
+      ['too many digits (the real bug this closes)', '033312123 1233 12'],
+      ['12 digits — neither 11 nor 13', '923001234567'],
+      ['9 digits — short of local, but long enough to pass the charset check', '300123456'],
+    ])('rejects %s with the digit-count message', async (_label, phone) => {
+      const res = await request(app).post('/api/orders').send(validOrder({ contact: { phone } }));
+      expect(res.status).toBe(422);
+      expect(res.body.details['contact.phone']?.[0]).toMatch(/11 digits|13 digits/);
+    });
+
+    // Too short to even reach the digit-count check — caught by the charset/length regex first,
+    // which is correct: "3" isn't "the wrong digit count", it's not shaped like a phone number.
+    it('rejects a too-short value with the generic message, not the digit-count one', async () => {
+      const res = await request(app).post('/api/orders').send(validOrder({ contact: { phone: '3' } }));
+      expect(res.status).toBe(422);
+      expect(res.body.details['contact.phone']?.[0]).toBe('Enter a valid phone number.');
+    });
   });
 
   it('never leaks internals in an error body', async () => {

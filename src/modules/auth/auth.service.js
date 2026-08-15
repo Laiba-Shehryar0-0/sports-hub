@@ -1,7 +1,7 @@
 import * as authRepository from './auth.repository.js';
 import { hashPassword } from './auth.password.js';
 import { signSessionToken, verifySessionToken } from './auth.token.js';
-import { sendVerificationEmail } from './auth.mailer.js';
+import { sendVerificationEmail, sendVerificationSuccessEmail } from './auth.mailer.js';
 import {
   generateCode, generateToken, hashCode, hashToken, hashesEqual,
   CODE_TTL_SECONDS, TOKEN_TTL_SECONDS, MAX_CODE_ATTEMPTS,
@@ -25,7 +25,9 @@ function codeExpiredError() {
  * Issues a fresh code for an existing verification row and emails it.
  * Fire-and-forget send: SMTP latency must never slow or fail the request that triggered it.
  */
-async function issueCode({ verificationId, userId, email, rotate }) {
+async function issueCode({
+  verificationId, userId, email, name, rotate,
+}) {
   const code = generateCode();
   const codeHash = hashCode(code);
 
@@ -35,7 +37,7 @@ async function issueCode({ verificationId, userId, email, rotate }) {
     });
   }
 
-  void sendVerificationEmail({ to: email, code });
+  void sendVerificationEmail({ to: email, code, name });
   logger.info({ userId }, 'Verification code issued'); // never logs the code itself
   return { codeHash };
 }
@@ -98,7 +100,7 @@ export async function register({ name, email, password }) {
 
   // Outside the transaction and not awaited — a slow or broken SMTP server must not hold a DB
   // connection open, delay the response, or roll back a successfully created account.
-  void sendVerificationEmail({ to: user.email, code });
+  void sendVerificationEmail({ to: user.email, code, name: user.name });
 
   return {
     user: toPublicUser(user),
@@ -152,6 +154,12 @@ export async function verifyEmail({ token, code, userAgent, ip }) {
 
   const { user } = outcome;
 
+  // Fire-and-forget, same reasoning as the verification code email: SMTP latency/failure must
+  // never slow or fail the response to a request that just succeeded. Sent exactly once — this
+  // function only reaches here on the transition INTO verified, never on a repeat call (a second
+  // attempt against an already-consumed token dies at outcome.status === 'dead' above).
+  void sendVerificationSuccessEmail({ to: user.email, name: user.name });
+
   const { token: sessionToken, jti, expiresAtUnix } = signSessionToken(user);
   await authRepository.createSession({ userId: user.id, jti, expiresAtUnix, userAgent, ip });
 
@@ -190,7 +198,9 @@ export async function resendCode({ token }) {
   const user = await authRepository.findUserForVerification(row.user_id);
   if (!user || user.email_verified_at) throw codeExpiredError();
 
-  await issueCode({ verificationId: row.id, userId: row.user_id, email: user.email, rotate: true });
+  await issueCode({
+    verificationId: row.id, userId: row.user_id, email: user.email, name: user.name, rotate: true,
+  });
   return { expiresIn: CODE_TTL_SECONDS };
 }
 
@@ -228,7 +238,7 @@ export async function login({ email, password, userAgent, ip }) {
       if (now - existing.last_sent_unix >= RESEND_COOLDOWN_SECONDS
           && existing.resend_count < MAX_RESENDS) {
         await issueCode({
-          verificationId: existing.id, userId: user.id, email: user.email, rotate: true,
+          verificationId: existing.id, userId: user.id, email: user.email, name: user.name, rotate: true,
         });
       }
     } else {
@@ -241,7 +251,7 @@ export async function login({ email, password, userAgent, ip }) {
         codeTtlSeconds: CODE_TTL_SECONDS,
         tokenTtlSeconds: TOKEN_TTL_SECONDS,
       });
-      void sendVerificationEmail({ to: user.email, code });
+      void sendVerificationEmail({ to: user.email, code, name: user.name });
     }
 
     throw new AppError('Please verify your email address to sign in.', {

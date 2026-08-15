@@ -1,4 +1,4 @@
-# Backend Plan — Kit World Sports
+# Backend Plan — D Sports Hub
 
 Reconciles `API_CONTRACT.md` (what the React app already calls) with what the backend
 actually needs to do. **The contract wins on shapes.** Where I deviate, it's for a security

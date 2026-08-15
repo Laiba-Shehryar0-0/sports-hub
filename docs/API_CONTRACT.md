@@ -1,4 +1,4 @@
-# API Contract — Kit World Sports Backend
+# API Contract — D Sports Hub Backend
 
 This is the contract the frontend already codes against. It's frontend-first: the
 React app was built to call these exact endpoints, so matching this shape means
@@ -195,6 +195,15 @@ Jammu & Kashmir — Islamabad is deliberately excluded, it's a federal territory
 **when `address.country` is `"Pakistan"`** — mismatch is a `422` with the allowed list in
 `details.address.province`. For any other country, `province` is free text and may be blank; there
 is no equivalent list for the other 28 `SHIPPING_COUNTRIES` (India removed 2026-08-15).
+
+**`address.city` is cross-checked against `address.province` for a domestic address** (added
+2026-08-15, `MAJOR_CITY_PROVINCE` in `orders.constants.js`) — city `"Karachi"` with province
+`"Balochistan"` is a `422`, since Karachi is in Sindh. This is a curated list of ~90 major cities,
+**not an exhaustive gazetteer**: a city that isn't on the list is never rejected on these grounds,
+by design — this app cannot tell a real small-town address from a typo, and wrongly blocking a real
+customer's order is a worse failure than missing an unlikely one. `"Islamabad"` maps to Punjab, the
+province it's physically administered from, matching the note above about it having no province of
+its own.
 
 **There is no card payment option.** `paymentId` is `bank` (manually reconciled — payment details
 are emailed, production starts once confirmed) or `cod`. Card was removed: nothing behind it ever
